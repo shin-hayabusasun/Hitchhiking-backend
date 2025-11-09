@@ -3,7 +3,7 @@
 
 # ...existing code...
 import os
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 
@@ -15,6 +15,12 @@ SQLALCHEMY_DATABASE_URL = os.getenv(
 
 # エンジン作成
 engine = create_engine(SQLALCHEMY_DATABASE_URL)
+
+@event.listens_for(engine, "connect")
+def connect(dbapi_connection, connection_record):
+    cursor = dbapi_connection.cursor()
+    cursor.execute("CREATE EXTENSION IF NOT EXISTS vector")
+    cursor.close()
 
 # セッション
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

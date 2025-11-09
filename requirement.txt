@@ -4,4 +4,11 @@ sqlalchemy==2.0.23
 pydantic==1.10.12
 fastapi==0.95.2
 uvicorn[standard]
+sentence-transformers==2.2.2
+torch==2.1.1
+transformers==4.35.2
+pgvector==0.4.1
+# 明示的に互換性の取れるバージョンを追加
+numpy<2  # ダウンロードされる NumPy を 1.x 系に制限
+huggingface-hub==0.17.3  # transformers の要件 >=0.16.4,<1.0 を満たす
 # ...existing code...
