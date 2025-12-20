@@ -6,19 +6,6 @@ from db_setting import Base
 from pgvector.sqlalchemy import Vector
 from datetime import datetime
 
-class User(Base):
-    __tablename__ = "users"
-
-    id = Column(Integer, primary_key=True, index=True)
-    name = Column(String, index=True)
-    email = Column(String, unique=True, index=True)
-    password = Column(String)
-    role = Column(String)
-    documents = relationship("Document", back_populates="user_rel")
-    cash = relationship("cash", back_populates="user_rel")
-    recruitment = relationship("recruitment", back_populates="user_rel")
-    root = relationship("root", back_populates="user_rel")
-
 class Document(Base):
     __tablename__ = "profile_documents"
 
@@ -38,6 +25,15 @@ class cash(Base):
     created_at = Column(DateTime, default=datetime.now)
     user_rel = relationship("User", back_populates="cash")
 
+class root(Base):
+    __tablename__ = "root"
+    id = Column(Integer, primary_key=True, index=True)
+    root_user_id = Column(Integer, ForeignKey("users.id"))
+    root = Column(String)
+    created_at = Column(DateTime, default=datetime.now)
+    user_rel = relationship("User", back_populates="root")
+    recruitment = relationship("recruitment", back_populates="root_rel")
+
 class recruitment(Base):
     __tablename__ = "recruitment"
     id = Column(Integer, primary_key=True, index=True)
@@ -48,13 +44,31 @@ class recruitment(Base):
     accept = Column(String)
     finish = Column(String)
     root_id = Column(ForeignKey("root.id"))
-    user_rel = relationship("User", back_populates="recruitment")
+    # recruitment 側でどの外部キーを使うかを明示（User は後で定義）
+    user_rel = relationship("User", foreign_keys=[re_user_id], back_populates="recruitment_sent")
+    re_user_rel = relationship("User", foreign_keys=[re_re_user_id], back_populates="recruitment_received")
     root_rel = relationship("root", back_populates="recruitment")
 
-class root(Base):
-    __tablename__ = "root"
+class User(Base):
+    __tablename__ = "users"
+
     id = Column(Integer, primary_key=True, index=True)
-    root_user_id = Column(Integer, ForeignKey("users.id"))
-    root = Column(String)
-    created_at = Column(DateTime, default=datetime.now)
-    user_rel = relationship("User", back_populates="root")
+    name = Column(String, index=True)
+    email = Column(String, unique=True, index=True)
+    password = Column(String)
+    role = Column(String)
+    documents = relationship("Document", back_populates="user_rel")
+    cash = relationship("cash", back_populates="user_rel")
+    # recruitment は送信/受信で 2 つに分ける
+    # recruitment クラス定義が先にあるため、下の recruitment.re_user_id 参照が有効
+    recruitment_sent = relationship(
+        "recruitment",
+        back_populates="user_rel",
+        foreign_keys=[recruitment.re_user_id]
+    )
+    recruitment_received = relationship(
+        "recruitment",
+        back_populates="re_user_rel",
+        foreign_keys=[recruitment.re_re_user_id]
+    )
+    root = relationship("root", back_populates="user_rel")
