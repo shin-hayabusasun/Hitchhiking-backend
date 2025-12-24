@@ -1,0 +1,264 @@
+
+% ユーザーテーブル
+\begin{table}[h]
+    \centering
+    \caption{ユーザー (users)}
+    \begin{tabular}{|c|c|c|c|c|c|}
+        \hline
+        \textbf{PK} & \textbf{FK} & \textbf{カラム名} & \textbf{型} & \textbf{NN} & \textbf{カラム内容} \\
+        \hline\hline
+        $\bigcirc$ & & user\_id & Integer & $\bigcirc$ & ユーザーID（自動連番） \\
+        \hline
+        & & name & varchar(20) & $\bigcirc$ & ユーザーの氏名 \\
+        \hline
+        & & email & varchar(255) & $\bigcirc$ & メールアドレス \\
+        \hline
+        & & password & varchar(100) & $\bigcirc$ & パスワード（ハッシュ化推奨） \\
+        \hline
+        & & gender & Integer & $\bigcirc$ & 性別（不明, 男性, 女性 等） \\
+        \hline
+        & & birth\_date & date & $\bigcirc$ & 生年月日 \\
+        \hline
+        & & address & varchar(100) & $\bigcirc$ & 住所 \\
+        \hline
+        & & identity\_doc & bytea & $\bigcirc$ & 本人確認書類データ \\
+        \hline
+    \end{tabular}
+\end{table}
+
+% 運転者情報テーブル（修正版：車両情報追加）
+\begin{table}[h]
+    \centering
+    \caption{運転者情報 (driver\_profiles)}
+    \begin{tabular}{|c|c|c|c|c|c|}
+        \hline
+        \textbf{PK} & \textbf{FK} & \textbf{カラム名} & \textbf{型} & \textbf{NN} & \textbf{カラム内容} \\
+        \hline\hline
+        $\bigcirc$ & $\bigcirc$ & user\_id & Integer & $\bigcirc$ & ユーザーID \\
+        \hline
+        & & license\_id & Integer & $\bigcirc$ & 運転免許証ID（管理番号等） \\
+        \hline
+        & & license\_expiry & date & $\bigcirc$ & 免許証有効期限 \\
+        \hline
+        & & drive\_count & Integer & $\bigcirc$ & 運転回数 \\
+        \hline
+        & & rating & numeric(1, 1) & $\bigcirc$ & 評価（\#.\#表記） \\
+        \hline
+        & & reg\_date & date & $\bigcirc$ & 初回登録日 \\
+        \hline
+        & & car\_model & varchar(20) & $\bigcirc$ & 車種 \\
+        \hline
+        & & car\_color & varchar(10) & $\bigcirc$ & 車の色 \\
+        \hline
+        & & car\_year & varchar(10) & $\bigcirc$ & 車の年式 \\
+        \hline
+        & & car\_number & varchar(20) & $\bigcirc$ & 車のナンバー \\
+        \hline
+        & & no\_smoking & boolean & & 禁煙車かどうか \\
+        \hline
+        & & pet\_ok & boolean & & ペット同乗可否 \\
+        \hline
+        & & food\_ok & boolean & & 飲食可否 \\
+        \hline
+        & & music\_ok & boolean & & 音楽可否 \\
+        \hline
+        & & location & Point & & 現在位置情報 \\
+        \hline
+        & & bio & text & & プロフィール文 \\
+        \hline
+        & & embedding & vector(1536) & & LLM用ベクトルデータ \\
+        \hline
+    \end{tabular}
+\end{table}
+
+% 同乗者情報テーブル
+\begin{table}[h]
+    \centering
+    \caption{同乗者情報 (passenger\_profiles)}
+    \begin{tabular}{|c|c|c|c|c|c|}
+        \hline
+        \textbf{PK} & \textbf{FK} & \textbf{カラム名} & \textbf{型} & \textbf{NN} & \textbf{カラム内容} \\
+        \hline\hline
+        $\bigcirc$ & $\bigcirc$ & user\_id & Integer & $\bigcirc$ & ユーザーID \\
+        \hline
+        & & ride\_count & Integer & $\bigcirc$ & 同乗回数 \\
+        \hline
+        & & rating & numeric(1, 1) & $\bigcirc$ & 評価(\#.\#表記) \\
+        \hline
+        & & reg\_date & date & $\bigcirc$ & 初回登録日 \\
+        \hline
+        & & location & Point & & 現在位置情報 \\
+        \hline
+        & & bio & text & & プロフィール文 \\
+        \hline
+        & & embedding & vector(1536) & & LLM用ベクトルデータ \\
+        \hline
+    \end{tabular}
+\end{table}
+
+% 募集管理テーブル
+\begin{table}[h]
+    \centering
+    \caption{募集管理 (recruitments)}
+    \begin{tabular}{|c|c|c|c|c|c|}
+        \hline
+        \textbf{PK} & \textbf{FK} & \textbf{カラム名} & \textbf{型} & \textbf{NN} & \textbf{カラム内容} \\
+        \hline\hline
+        $\bigcirc$ & & recruitment\_id & Integer & $\bigcirc$ & 募集ID \\
+        \hline
+        & $\bigcirc$ & recruiter\_user\_id & Integer & $\bigcirc$ & 募集者のユーザーID \\
+        \hline
+        & & status & Integer & $\bigcirc$ & 募集状況(募集中,募集終了,運転完了) \\
+        \hline
+        & & fare & Integer & $\bigcirc$ & 運賃 \\
+        \hline
+        & & capacity & Integer & $\bigcirc$ & 募集人数 \\
+        \hline
+        & & type & Integer & $\bigcirc$ & 募集タイプ（運転者or同乗者からの募集） \\
+        \hline
+        & $\bigcirc$ & route\_id & Integer & $\bigcirc$ & 経路ID \\
+        \hline
+    \end{tabular}
+\end{table}
+
+% 経路テーブル
+\begin{table}[h]
+    \centering
+    \caption{経路 (routes)}
+    \begin{tabular}{|c|c|c|c|c|c|}
+        \hline
+        \textbf{PK} & \textbf{FK} & \textbf{カラム名} & \textbf{型} & \textbf{NN} & \textbf{カラム内容} \\
+        \hline\hline
+        $\bigcirc$ & & route\_id & Integer & $\bigcirc$ & 経路ID \\
+        \hline
+        & $\bigcirc$ & recruiter\_user\_id & Integer & $\bigcirc$ & 募集者のユーザーID \\
+        \hline
+        & & path\_geometry & Geometry & $\bigcirc$ & 経路の形状データ \\
+        \hline
+        & & dep\_time & timestamp(0) & $\bigcirc$ & 出発時間 \\
+        \hline
+        & & dep\_point & Point & $\bigcirc$ & 出発位置 \\
+        \hline
+        & & arr\_time & timestamp(0) & $\bigcirc$ & 到着時間 \\
+        \hline
+        & & arr\_point & Point & $\bigcirc$ & 到着位置 \\
+        \hline
+    \end{tabular}
+\end{table}
+
+% 申請取引テーブル
+\begin{table}[h]
+    \centering
+    \caption{申請取引 (applications)}
+    \begin{tabular}{|c|c|c|c|c|c|}
+        \hline
+        \textbf{PK} & \textbf{FK} & \textbf{カラム名} & \textbf{型} & \textbf{NN} & \textbf{カラム内容} \\
+        \hline\hline
+        $\bigcirc$ & & application\_id & Integer & $\bigcirc$ & 申請取引ID \\
+        \hline
+        & $\bigcirc$ & recruitment\_id & Integer & $\bigcirc$ & 募集ID \\
+        \hline
+        & $\bigcirc$ & applicant\_user\_id & Integer & $\bigcirc$ & 申請者のユーザーID \\
+        \hline
+        & & status & Integer & $\bigcirc$ & 成立状況(申請中, 承認, 否認)
+        \\
+        \hline
+        & $\bigcirc$ & chat\_id & Integer & $\bigcirc$ & チャットID \\
+        \hline
+    \end{tabular}
+\end{table}
+
+% チャットテーブル
+\begin{table}[h]
+    \centering
+    \caption{チャット (chats)}
+    \begin{tabular}{|c|c|c|c|c|c|}
+        \hline
+        \textbf{PK} & \textbf{FK} & \textbf{カラム名} & \textbf{型} & \textbf{NN} & \textbf{カラム内容} \\
+        \hline\hline
+        $\bigcirc$ & & chat\_id & Integer & $\bigcirc$ & チャットID \\
+        \hline
+        & & message & text & & テキストメッセージ \\
+        \hline
+        & $\bigcirc$ & application\_id & Integer & $\bigcirc$ & 申請取引ID \\
+        \hline
+    \end{tabular}
+\end{table}
+
+% 決済情報テーブル
+\begin{table}[h]
+    \centering
+    \caption{決済情報 (payments)}
+    \begin{tabular}{|c|c|c|c|c|c|}
+        \hline
+        \textbf{PK} & \textbf{FK} & \textbf{カラム名} & \textbf{型} & \textbf{NN} & \textbf{カラム内容} \\
+        \hline\hline
+        $\bigcirc$ & & payment\_id & Integer & $\bigcirc$ & 決済情報ID \\
+        \hline
+        & $\bigcirc$ & user\_id & Integer & $\bigcirc$ & ユーザーID \\
+        \hline
+        & & card\_number & Integer & $\bigcirc$ & カード番号 \\
+        \hline
+        & & transaction\_id & Integer & & トランザクションID \\
+        \hline
+        & & status & Integer & & 支払い状況（保留中,成功,失敗,取消） \\
+        \hline
+        & & billing\_date & timestamp & & 請求日時 \\
+        \hline
+    \end{tabular}
+\end{table}
+
+% 売上・ポイント残高テーブル
+\begin{table}[h]
+    \centering
+    \caption{売上・ポイント残高 (user\_balances)}
+    \begin{tabular}{|c|c|c|c|c|c|}
+        \hline
+        \textbf{PK} & \textbf{FK} & \textbf{カラム名} & \textbf{型} & \textbf{NN} & \textbf{カラム内容} \\
+        \hline\hline
+        $\bigcirc$ & $\bigcirc$ & user\_id & Integer & $\bigcirc$ & ユーザーID \\
+        \hline
+        & & point\_balance & Integer & & ポイント残高 \\
+        \hline
+        & & sales\_history & Integer & & 売上履歴（総額等） \\
+        \hline
+    \end{tabular}
+\end{table}
+
+% 注文テーブル
+\begin{table}[h]
+    \centering
+    \caption{注文 (orders)}
+    \begin{tabular}{|c|c|c|c|c|c|}
+        \hline
+        \textbf{PK} & \textbf{FK} & \textbf{カラム名} & \textbf{型} & \textbf{NN} & \textbf{カラム内容} \\
+        \hline\hline
+        $\bigcirc$ & & order\_id & Integer & $\bigcirc$ & 注文ID \\
+        \hline
+        & $\bigcirc$ & product\_id & Integer & $\bigcirc$ & 商品ID \\
+        \hline
+        & & order\_date & timestamp & $\bigcirc$ & 注文日時 \\
+        \hline
+        & $\bigcirc$ & user\_id & Integer & $\bigcirc$ & ユーザーID \\
+        \hline
+    \end{tabular}
+\end{table}
+
+% 商品テーブル
+\begin{table}[h]
+    \centering
+    \caption{商品 (products)}
+    \begin{tabular}{|c|c|c|c|c|c|}
+        \hline
+        \textbf{PK} & \textbf{FK} & \textbf{カラム名} & \textbf{型} & \textbf{NN} & \textbf{カラム内容} \\
+        \hline\hline
+        $\bigcirc$ & & product\_id & Integer & $\bigcirc$ & 商品ID \\
+        \hline
+        & & name & varchar(50) & $\bigcirc$ & 商品名 \\
+        \hline
+        & & stock & Integer & $\bigcirc$ & 在庫数 \\
+        \hline
+        & & reg\_date & timestamp(6) & $\bigcirc$ & 登録日時 \\
+        \hline
+    \end{tabular}
+\end{table}

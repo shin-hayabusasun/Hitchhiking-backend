@@ -1,59 +1,75 @@
 # FastAPIをインポート
 
-from db_setting import engine, Base,SessionLocal#db_setting.pyからエンジンとベースクラスをインポート
+from db_setting import engine, Base, SessionLocal
 from fastapi import FastAPI, Depends, HTTPException
 from sqlalchemy.orm import Session
-from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
-import modelDB#models.pyをインポート(DBモデル定義)
-import ai_model#ai-model.pyをインポート(埋め込み生成モデル)
+import modelDB  # models.pyをインポート(DBモデル定義)
 from pydantic import BaseModel
-from typing import List
+from typing import List, Optional
+from datetime import datetime, date
 
 
 # テーブル作成
 modelDB.Base.metadata.create_all(bind=engine)
 
 # FastAPIのインスタンス作成
-app = FastAPI()
+app = FastAPI(
+    title="Rideshare API",
+    description="ライドシェアアプリケーションのAPI",
+    version="1.0.0"
+)
+
 
 # Pydantic レスポンスモデル
+class UserCreate(BaseModel):
+    name: str
+    email: str
+    password: str
+    gender: int
+    birth_date: str  # YYYY-MM-DD形式
+    address: str
+
+
 class UserOut(BaseModel):
-    id: int
+    user_id: int
     name: str
     email: str
     
     class Config:
         orm_mode = True
 
-class DocumentOut(BaseModel):
-    id: int
+
+class DriverProfileCreate(BaseModel):
     user_id: int
-    content: str
-    embedding: List[float]
+    license_id: int
+    license_expiry: str  # YYYY-MM-DD形式
+    car_model: str
+    car_color: str
+    car_year: str
+    car_number: str
+    no_smoking: Optional[bool] = None
+    pet_ok: Optional[bool] = None
+    food_ok: Optional[bool] = None
+    music_ok: Optional[bool] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    bio: Optional[str] = None
+
+
+class DriverProfileOut(BaseModel):
+    user_id: int
+    license_id: int
+    drive_count: int
+    rating: float
+    car_model: str
+    car_color: str
+    latitude: Optional[float]
+    longitude: Optional[float]
     
     class Config:
         orm_mode = True
-        arbitrary_types_allowed = True
-    
-    @classmethod
-    def from_orm(cls, obj):
-        # pgvector の Vector 型を list に変換
-        embedding_list = []
-        if obj.embedding is not None:
-            # numpy配列やpgvector型を確実にリストに変換
-            if hasattr(obj.embedding, 'tolist'):
-                embedding_list = obj.embedding.tolist()
-            else:
-                embedding_list = [float(x) for x in obj.embedding]
-        
-        data = {
-            'id': obj.id,
-            'user_id': obj.user_id,
-            'content': obj.content,
-            'embedding': embedding_list
-        }
-        return cls(**data)
+
 
 # DBセッションをリクエストごとに生成・破棄する
 def get_db():
@@ -64,60 +80,153 @@ def get_db():
         db.close()
 
 
-# GETメソッドでルートURLにアクセスされたときの処理
+# ===============================
+# ルートエンドポイント
+# ===============================
+
 @app.get("/")
 async def root():
-    return {"message": "Hello World"}
+    return {
+        "message": "Rideshare API - Successfully Running",
+        "status": "ok",
+        "version": "1.0.0"
+    }
 
+
+@app.get("/health")
+async def health_check():
+    """ヘルスチェック"""
+    return {"status": "healthy"}
+
+
+# ===============================
+# ユーザー関連エンドポイント
+# ===============================
 
 @app.post("/users/", response_model=UserOut)
-def create_user(name: str, email: str, db: Session = Depends(get_db)):
-    user = modelDB.User(name=name, email=email)
-    db.add(user)
+def create_user(user: UserCreate, db: Session = Depends(get_db)):
+    """ユーザーを作成"""
+    try:
+        birth_date_obj = datetime.strptime(user.birth_date, "%Y-%m-%d").date()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
+    
+    new_user = modelDB.User(
+        name=user.name,
+        email=user.email,
+        password=user.password,  # 本番環境ではハッシュ化必須
+        gender=user.gender,
+        birth_date=birth_date_obj,
+        address=user.address,
+        identity_doc=b''  # 一時的に空のバイナリ
+    )
+    
+    db.add(new_user)
     try:
         db.commit()
+        db.refresh(new_user)
+        return new_user
     except IntegrityError:
         db.rollback()
         raise HTTPException(status_code=400, detail="Email already exists")
-    db.refresh(user)
-    return user
+
 
 @app.get("/users/", response_model=List[UserOut])
-def get_users(db: Session = Depends(get_db)):
-    return db.query(modelDB.User).all()
+def get_users(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+    """ユーザー一覧を取得"""
+    users = db.query(modelDB.User).offset(skip).limit(limit).all()
+    return users
 
-@app.post("/documents/", response_model=DocumentOut)
-def create_document(user: int, content: str, db: Session = Depends(get_db)):
-    # userをuser_idとして扱う
-    # ユーザー存在チェック（外部キー違反の事前防止）
-    user_obj = db.query(modelDB.User).filter(modelDB.User.id == user).first()
-    if not user_obj:
-        raise HTTPException(status_code=404, detail=f"User {user} not found")
+
+@app.get("/users/{user_id}", response_model=UserOut)
+def get_user(user_id: int, db: Session = Depends(get_db)):
+    """特定のユーザーを取得"""
+    user = db.query(modelDB.User).filter(modelDB.User.user_id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return user
+
+
+# ===============================
+# 運転者プロフィール関連エンドポイント
+# ===============================
+
+@app.post("/driver-profiles/", response_model=DriverProfileOut)
+def create_driver_profile(profile: DriverProfileCreate, db: Session = Depends(get_db)):
+    """運転者プロフィールを作成"""
+    # ユーザー存在チェック
+    user = db.query(modelDB.User).filter(modelDB.User.user_id == profile.user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
     
-    embedding = ai_model.get_embedding(content)
-    document = modelDB.Document(user_id=user, content=content, embedding=embedding)
-    db.add(document)
+    # 既にプロフィールが存在するかチェック
+    existing = db.query(modelDB.DriverProfile).filter(
+        modelDB.DriverProfile.user_id == profile.user_id
+    ).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Driver profile already exists")
+    
+    try:
+        license_expiry_obj = datetime.strptime(profile.license_expiry, "%Y-%m-%d").date()
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
+    
+    new_profile = modelDB.DriverProfile(
+        user_id=profile.user_id,
+        license_id=profile.license_id,
+        license_expiry=license_expiry_obj,
+        drive_count=0,
+        rating=0.0,
+        reg_date=date.today(),
+        car_model=profile.car_model,
+        car_color=profile.car_color,
+        car_year=profile.car_year,
+        car_number=profile.car_number,
+        no_smoking=profile.no_smoking,
+        pet_ok=profile.pet_ok,
+        food_ok=profile.food_ok,
+        music_ok=profile.music_ok,
+        latitude=profile.latitude,
+        longitude=profile.longitude,
+        bio=profile.bio
+    )
+    
+    db.add(new_profile)
     try:
         db.commit()
+        db.refresh(new_profile)
+        return new_profile
     except IntegrityError:
         db.rollback()
-        raise HTTPException(status_code=400, detail="Foreign key violation")
-    db.refresh(document)
-    return document
+        raise HTTPException(status_code=400, detail="Failed to create driver profile")
 
-@app.post("/documents/search/")
-def search_documents(query: str, top_k: int = 5, db: Session = Depends(get_db)):
-    query_embedding = ai_model.get_embedding(query)
-    # query_embeddingをvector型の文字列表現に変換
-    embedding_str = '[' + ','.join(map(str, query_embedding)) + ']'
-    # SQLクエリの修正（user_idに合わせる、text()でラップ、vector型にキャスト）
-    results = db.execute(
-        text("""
-        SELECT id, user_id, content, embedding <-> CAST(:query_embedding AS vector) AS distance
-        FROM profile_documents
-        ORDER BY embedding <-> CAST(:query_embedding AS vector)
-        LIMIT :top_k
-        """),
-        {"query_embedding": embedding_str, "top_k": top_k}
-    ).fetchall()
-    return [{"id": r.id, "user_id": r.user_id, "content": r.content, "distance": r.distance} for r in results]
+
+@app.get("/driver-profiles/", response_model=List[DriverProfileOut])
+def get_driver_profiles(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+    """運転者プロフィール一覧を取得"""
+    profiles = db.query(modelDB.DriverProfile).offset(skip).limit(limit).all()
+    return profiles
+
+
+@app.get("/driver-profiles/{user_id}", response_model=DriverProfileOut)
+def get_driver_profile(user_id: int, db: Session = Depends(get_db)):
+    """特定の運転者プロフィールを取得"""
+    profile = db.query(modelDB.DriverProfile).filter(
+        modelDB.DriverProfile.user_id == user_id
+    ).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Driver profile not found")
+    return profile
+
+
+# ===============================
+# テーブル一覧確認（デバッグ用）
+# ===============================
+
+@app.get("/debug/tables")
+def list_tables(db: Session = Depends(get_db)):
+    """作成されたテーブル一覧を取得（デバッグ用）"""
+    from sqlalchemy import inspect
+    inspector = inspect(engine)
+    tables = inspector.get_table_names()
+    return {"tables": tables}
