@@ -14,7 +14,7 @@ import hashlib
 router = APIRouter(prefix="/api/user", tags=["user"])
 
 
-# DBセッション
+# DBセッションhieda
 def get_db():
     db = SessionLocal()
     try:
