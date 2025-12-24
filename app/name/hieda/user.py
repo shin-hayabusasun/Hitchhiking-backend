@@ -57,7 +57,7 @@ async def login(user: UserLogin, db: Session = Depends(get_db)):
     管理者orユーザーログイン
     
     処理:
-    1. メールアドレスとパスワードを取り出す
+    1. メールアドレスとパスワードを取り出す gggg
     2. userテーブルから検索して認証
     3. 認証結果とセッションを返す
     """
