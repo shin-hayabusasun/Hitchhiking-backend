@@ -10,7 +10,7 @@ sys.path.append('..')
 from db_setting import SessionLocal
 import modelDB
 
-# % Start (担当者名) 同乗者用ルーターの定義
+# % Start 田所 同乗者用ルーターの定義
 router = APIRouter(prefix="/api/hitchhiker", tags=["hitchhiker"])
 # % End
 
@@ -24,7 +24,7 @@ def get_db():
         db.close()
 
 
-# % Start (担当者名) レスポンス・リクエストの型定義
+# % Start 田所 レスポンス・リクエストの型定義
 class SearchCard(BaseModel):
     recruitment_id: int
     driver_name: str
@@ -58,7 +58,7 @@ async def search_recruitment(
        加するという処理も書く. 募集テーブルから募集中という表記のもので取り出す.
     3. 取り出したレコードをオブジェクトの配列化する.
     """
-    # % Start (担当者名) 募集検索処理
+    # % Start 田所 募集検索処理
     
     # 1. ログインユーザーの特定 (セッションからユーザーIDを取得する処理を想定)
     # ここでは仮のユーザーIDを使用
