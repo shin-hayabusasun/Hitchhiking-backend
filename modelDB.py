@@ -6,6 +6,14 @@ from db_setting import Base
 from pgvector.sqlalchemy import Vector
 from datetime import datetime
 
+
+class Session(Base):
+    __tablename__ = "sessions"
+
+    session_id = Column(String, primary_key=True, index=True)
+    user_id = Column(Integer, index=True, nullable=False)
+    expires_at = Column(DateTime, nullable=False)
+
 # ユーザーテーブル
 class User(Base):
     __tablename__ = "users"
