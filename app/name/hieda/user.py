@@ -1,5 +1,5 @@
 # /api/user/* エンドポイント
-from fastapi import APIRouter, Depends, HTTPException,Response
+from fastapi import APIRouter, Depends, HTTPException,Response,Request
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from pydantic import BaseModel, EmailStr
@@ -77,15 +77,15 @@ async def login(
     # ここでは例としてユーザーIDを入れていますが、実際はJWTなどを生成して入れます
     response.set_cookie(
         key="session_id",
-        value=str(user_in_db.id), 
+        value=str(user_in_db.user_id), 
         httponly=True,   # JSから盗まれないようにする
         samesite="lax",  # CSRF対策
         max_age=3600 * 24, # 1日有効
         secure=False,    # 開発中はFalse、本番(HTTPS)はTrue
     )
 
-    # isuser（権限）はDBの値を返すのが安全です
-    return LoginResponse(ok=True, isuser=user_in_db.isdriver)
+    
+    return LoginResponse(ok=True, isuser=user.isuser)
 
 @router.post("/regist", response_model=RegistResponse)
 async def regist(user: UserRegist, db: Session = Depends(get_db)):
@@ -179,15 +179,29 @@ async def logout(credentials: str = "include"):
     # TODO: 実装
     return {"ok": True}
 
-
 @router.get("/IsLogin")
-async def is_login(credentials: str = "include"):
+async def is_login(request: Request, db: Session = Depends(get_db)):
     """
     ログイン中か確認
     
     処理:
-    1. セッションが発行されているものと一致するか確認
+    1. セッションIDがクッキーに存在するか確認
+    2. セッションIDが有効かどうかを確認
     """
-    # TODO: 実装
-    return {"ok": True}
+    # クッキーからセッションIDを取得
+    session_id = request.cookies.get("session_id")
+    
+    if not session_id:
+        return RegistResponse(ok=False)
 
+    # セッションIDが有効かどうかをデータベースで確認
+    user_in_db = db.query(modelDB.User).filter(modelDB.User.user_id == session_id).first()
+    
+    if not user_in_db:
+        return RegistResponse(ok=False)
+
+    print(user_in_db)  # ログにユーザー情報を出力
+
+    # キャッシュを無効にするヘッダーを設定
+
+    return RegistResponse(ok=True)
