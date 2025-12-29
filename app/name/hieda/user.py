@@ -1,5 +1,5 @@
 # /api/user/* エンドポイント
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException,Response
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from pydantic import BaseModel, EmailStr
@@ -10,6 +10,11 @@ sys.path.append('..')
 from db_setting import SessionLocal
 import modelDB
 import hashlib
+from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy.orm import Session
+# パスワード検証用のライブラリ (bcrypt)
+from passlib.context import CryptContext
+
 
 router = APIRouter(prefix="/api/user", tags=["user"])
 
@@ -25,7 +30,7 @@ def get_db():
 
 # スキーマ
 class UserLogin(BaseModel):
-    mail: EmailStr
+    mail: str
     password: str
     isuser: int  # 1: ユーザー, 0: 管理者
     credentials: str = "include"
@@ -50,70 +55,94 @@ class UserRegist(BaseModel):
 class RegistResponse(BaseModel):
     ok: bool
 
-
 @router.post("/login", response_model=LoginResponse)
-async def login(user: UserLogin, db: Session = Depends(get_db)):
-    """
-    管理者orユーザーログイン
+async def login(
+    user: UserLogin, 
+    response: Response, # ★ クッキー操作のために追加
+    db: Session = Depends(get_db)
+):
+    # 1. ユーザーをDBから取得
+    user_in_db = db.query(modelDB.User).filter(modelDB.User.email == user.mail).first()
     
-    処理:
-    1. メールアドレスとパスワードを取り出す gggg
-    2. userテーブルから検索して認証
-    3. 認証結果とセッションを返す
-    """
-    # TODO: 実装
-    return LoginResponse(ok=True, isuser=user.isuser)
+    if not user_in_db:
+        raise HTTPException(status_code=400, detail="Invalid email or password")
 
+    # 2. パスワード照合
+    # ※ 本来は pwd_context.verify(user.password, user_in_db.password) を推奨
+    hashed_password = hashlib.sha256(user.password.encode()).hexdigest()
+    if user_in_db.password != hashed_password:
+        return LoginResponse(ok=False, isuser=user.isuser)
+    
+    # 3. ★ クッキーをセット（これが credentials: 'include' で送受信される）
+    # ここでは例としてユーザーIDを入れていますが、実際はJWTなどを生成して入れます
+    response.set_cookie(
+        key="session_id",
+        value=str(user_in_db.id), 
+        httponly=True,   # JSから盗まれないようにする
+        samesite="lax",  # CSRF対策
+        max_age=3600 * 24, # 1日有効
+        secure=False,    # 開発中はFalse、本番(HTTPS)はTrue
+    )
+
+    # isuser（権限）はDBの値を返すのが安全です
+    return LoginResponse(ok=True, isuser=user_in_db.isdriver)
 
 @router.post("/regist", response_model=RegistResponse)
 async def regist(user: UserRegist, db: Session = Depends(get_db)):
     """
-    登録API
-    
-    処理:
-    1. リクエストヘッダーの情報を取り出す
-    2. userテーブルに入れる（パスワードはhash化）
+    新規ユーザー登録API
+    フロントエンドの配列形式（name, barthday, adress）と
+    Base64画像データ（プレフィックス付き）に対応
     """
     try:
-        # 1. データの整形
-        # 名前を結合（姓 名）
+        # 1. 名前の結合 (例: ["山田", "太郎"] -> "山田 太郎")
         full_name = " ".join(user.name)
         
-        # 住所を結合
+        # 2. 住所の結合 (例: ["123-4567", "東京都", ...] -> "123-4567 東京都 ...")
         full_address = " ".join(user.adress)
         
-        # 誕生日を日付型に変換
-        birth_date = date(user.barthday[0], user.barthday[1], user.barthday[2])
+        # 3. 生年月日の変換 (例: [2025, 1, 1] -> date型)
+        try:
+            birth_date = date(user.barthday[0], user.barthday[1], user.barthday[2])
+        except (IndexError, ValueError):
+            raise HTTPException(status_code=400, detail="生年月日の形式が不正です")
         
-        # パスワードをハッシュ化（SHA-256）
+        # 4. パスワードのハッシュ化
         hashed_password = hashlib.sha256(user.password.encode()).hexdigest()
         
-        # identification（base64）をバイナリに変換
-        import base64
-        identity_doc_binary = base64.b64decode(user.identification)
+        # 5. identification (Base64) の処理
+        # FileReader.readAsDataURL の結果は "data:image/png;base64,iVBOR..." となるため、
+        # カンマより後ろの純粋なデータ部分のみを抽出する
+        try:
+            if "," in user.identification:
+                # プレフィックス(data:image/xxx;base64,)を切り捨てる
+                header, encoded = user.identification.split(",", 1)
+            else:
+                encoded = user.identification
+            identity_doc_binary = base64.b64decode(encoded)
+        except Exception:
+            raise HTTPException(status_code=400, detail="本人確認書類のデータが不正です")
         
-        # 2. userテーブルに挿入
+        # 6. Userテーブルへの挿入
         new_user = modelDB.User(
             name=full_name,
             email=user.mail,
             password=hashed_password,
-            gender=user.sex,
+            gender=user.sex, # フロントから 1(男性) or 0(女性) が来る
             birth_date=birth_date,
             address=full_address,
             identity_doc=identity_doc_binary
         )
         
         db.add(new_user)
-        db.commit()
-        db.refresh(new_user)
+        db.flush() # IDを確定させるために一旦反映（commitはまだしない）
         
-        # 3. 運転者としても登録する場合
+        # 7. 運転者としても登録する場合 (isdriver == 1)
         if user.isdriver == 1:
-            # 運転者プロフィールのデフォルト値で登録
             driver_profile = modelDB.DriverProfile(
                 user_id=new_user.user_id,
-                license_id=0,  # 後で更新する必要あり
-                license_expiry=date.today(),  # 後で更新する必要あり
+                license_id="0",
+                license_expiry=date.today(),
                 drive_count=0,
                 rating=0.0,
                 reg_date=date.today(),
@@ -123,21 +152,18 @@ async def regist(user: UserRegist, db: Session = Depends(get_db)):
                 car_number="未設定"
             )
             db.add(driver_profile)
-            db.commit()
         
+        # 最後にまとめてコミット（一貫性を保つため）
+        db.commit()
         return RegistResponse(ok=True)
         
-    except IntegrityError as e:
+    except IntegrityError:
         db.rollback()
-        # メールアドレスが既に存在する場合
-        raise HTTPException(status_code=400, detail="Email already exists")
-    except ValueError as e:
-        db.rollback()
-        # 日付の形式が不正な場合
-        raise HTTPException(status_code=400, detail=f"Invalid date format: {str(e)}")
+        # メールアドレスの重複など
+        raise HTTPException(status_code=400, detail="このメールアドレスは既に登録されています")
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"Registration failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"予期せぬエラーが発生しました: {str(e)}")
 
 
 @router.get("/logout")
