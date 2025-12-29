@@ -119,7 +119,8 @@ async def regist(user: UserRegist, db: Session = Depends(get_db)):
                 header, encoded = user.identification.split(",", 1)
             else:
                 encoded = user.identification
-            identity_doc_binary = base64.b64decode(encoded)
+            #identity_doc_binary = base64.b64decode(encoded)
+            identity_doc_binary= encoded.encode('utf-8')  # バイナリとして保存
         except Exception:
             raise HTTPException(status_code=400, detail="本人確認書類のデータが不正です")
         
