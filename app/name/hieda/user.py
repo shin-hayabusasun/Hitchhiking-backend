@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from pydantic import BaseModel, EmailStr
 from typing import Optional, List
-from datetime import datetime, date
+from datetime import datetime, date,timedelta
 import sys
 sys.path.append('..')
 from db_setting import SessionLocal
@@ -14,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 # パスワード検証用のライブラリ (bcrypt)
 from passlib.context import CryptContext
+import secrets
 
 
 router = APIRouter(prefix="/api/user", tags=["user"])
@@ -55,6 +56,52 @@ class UserRegist(BaseModel):
 class RegistResponse(BaseModel):
     ok: bool
 
+class IsLoginResponse(BaseModel):
+    ok: bool
+    userid: int | None
+
+#settion生成
+def create_session(db: Session, user_id: int):
+    session_id = secrets.token_urlsafe(32)  # 推測不能
+    expires_at = datetime.utcnow() + timedelta(days=1)
+
+    session = modelDB.Session(
+        session_id=session_id,
+        user_id=user_id,
+        expires_at=expires_at
+    )
+    db.add(session)
+    db.commit()
+
+    return session_id
+
+def get_current_user(
+    session_id: str,
+    db: Session
+):
+
+    session = db.query(modelDB.Session)\
+        .filter(modelDB.Session.session_id == session_id)\
+        .first()
+
+    if not session:
+        return "no"
+
+    if session.expires_at < datetime.utcnow():
+        db.query(modelDB.Session)\
+          .filter(modelDB.Session.session_id == session_id)\
+          .delete()
+        db.commit()
+        return "no"
+
+    user = db.query(modelDB.User)\
+        .filter(modelDB.User.user_id == session.user_id)\
+        .first()
+
+    userid=str(user.user_id)
+
+    return userid
+
 @router.post("/login", response_model=LoginResponse)
 async def login(
     user: UserLogin, 
@@ -72,12 +119,14 @@ async def login(
     hashed_password = hashlib.sha256(user.password.encode()).hexdigest()
     if user_in_db.password != hashed_password:
         return LoginResponse(ok=False, isuser=user.isuser)
+
+    session_id = create_session(db, user_in_db.user_id)
     
     # 3. ★ クッキーをセット（これが credentials: 'include' で送受信される）
     # ここでは例としてユーザーIDを入れていますが、実際はJWTなどを生成して入れます
     response.set_cookie(
         key="session_id",
-        value=str(user_in_db.user_id), 
+        value=session_id, 
         httponly=True,   # JSから盗まれないようにする
         samesite="lax",  # CSRF対策
         max_age=3600 * 24, # 1日有効
@@ -168,15 +217,17 @@ async def regist(user: UserRegist, db: Session = Depends(get_db)):
 
 
 @router.get("/logout")
-async def logout(credentials: str = "include"):
-    """
-    ログアウト
-    
-    処理:
-    1. セッションからuseridを取り出す
-    2. ログアウト処理してセッションを消去
-    """
-    # TODO: 実装
+def logout(
+    response: Response,
+    request: Request,
+    db: Session = Depends(get_db)
+):
+    session_id = request.cookies.get("session_id")
+    if session_id:
+        db.query(modelDB.Session).filter(modelDB.Session.session_id == session_id).delete()
+        db.commit()
+
+    response.delete_cookie("session_id")
     return {"ok": True}
 
 @router.get("/IsLogin")
@@ -190,18 +241,17 @@ async def is_login(request: Request, db: Session = Depends(get_db)):
     """
     # クッキーからセッションIDを取得
     session_id = request.cookies.get("session_id")
+
+    
     
     if not session_id:
         return RegistResponse(ok=False)
+    
+    res=get_current_user(session_id=session_id,db= db)
 
     # セッションIDが有効かどうかをデータベースで確認
-    user_in_db = db.query(modelDB.User).filter(modelDB.User.user_id == session_id).first()
-    
-    if not user_in_db:
+    if res=="no":
         return RegistResponse(ok=False)
 
-    print(user_in_db)  # ログにユーザー情報を出力
+    return IsLoginResponse(ok=True,userid=res)
 
-    # キャッシュを無効にするヘッダーを設定
-
-    return RegistResponse(ok=True)
