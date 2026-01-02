@@ -30,14 +30,14 @@ app.add_middleware(
 #ユーザー関連エンドポイントインポート 稗田start 30行
 
 from app.name.hieda import user  # ユーザー関連エンドポイントインポート
-
+from app.name.hieda import hitchsearch
 # ルーター登録
 app.include_router(user.router)
-
-
-
-
-
+app.include_router(hitchsearch.router)
+from app.name.hieda import drive
+app.include_router(drive.router)
+from app.name.hieda import driverreq
+app.include_router(driverreq.router)
 
 
 

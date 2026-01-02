@@ -13,4 +13,5 @@ pgvector==0.4.1
 numpy<2  # ダウンロードされる NumPy を 1.x 系に制限
 huggingface-hub==0.17.3  # transformers の要件 >=0.16.4,<1.0 を満たす
 passlib[bcrypt]
+geopy
 # ...existing code...
