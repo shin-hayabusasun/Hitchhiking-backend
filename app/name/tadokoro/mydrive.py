@@ -17,9 +17,10 @@ def get_db():
     finally:
         db.close()
 
+# --- 設計書の型に合わせたレスポンス定義 ---
 class DriveDetailResponse(BaseModel):
     ok: bool
-    drive_id: str
+    drive_id: int
     driver_name: str
     origin: str
     destination: str
@@ -31,30 +32,34 @@ class DriveDetailResponse(BaseModel):
     status: str
 
 @router.get("/DriveDetail", response_model=DriveDetailResponse)
-async def get_drive_detail(ride_id: str, db: Session = Depends(get_db)):
-    # 1. 募集テーブル取得
-    drive = db.query(modelDB.募集).filter(modelDB.募集.募集ID == ride_id).first()
+async def get_drive_detail(ride_id: int, db: Session = Depends(get_db)):
+    # 1. 募集テーブル (recruitments) 取得
+    # クラス名は modelDB.Recruitment, カラム名は recruitment_id です
+    drive = db.query(modelDB.Recruitment).filter(modelDB.Recruitment.recruitment_id == ride_id).first()
     
     if not drive:
-        raise HTTPException(status_code=404, detail="募集IDが見つかりません")
+        raise HTTPException(status_code=404, detail="募集データが見つかりません")
 
-    # 2. 関連データ取得（存在しない可能性を考慮）
-    driver = db.query(modelDB.ユーザー).filter(modelDB.ユーザー.ユーザーID == drive.募集ユーザーID).first()
-    route = db.query(modelDB.経路).filter(modelDB.経路.経路ID == drive.経路ID).first()
-    profile = db.query(modelDB.プロフィール_位置情報).filter(modelDB.プロフィール_位置情報.ユーザーID == drive.募集ユーザーID).first()
+    # 2. ユーザー (users) 取得
+    driver = db.query(modelDB.User).filter(modelDB.User.user_id == drive.recruiter_user_id).first()
+    
+    # 3. 経路 (routes) 取得
+    route = db.query(modelDB.Route).filter(modelDB.Route.route_id == drive.route_id).first()
+    
+    # 4. 運転者プロフィール (driver_profiles) 取得
+    profile = db.query(modelDB.DriverProfile).filter(modelDB.DriverProfile.user_id == drive.recruiter_user_id).first()
 
-    # 3. 500エラーを絶対に防ぐための安全なデータ取り出し
-    # 全ての項目に対して、データが無い場合の予備（デフォルト値）を設定します
+    # --- データの組み立て (設計書 Table1~5 のカラム名を使用) ---
     return DriveDetailResponse(
         ok=True,
-        drive_id=str(getattr(drive, '募集ID', ride_id)),
-        driver_name=str(getattr(driver, '名前', "不明")),
-        origin=str(getattr(route, '出発位置', "未設定")),
-        destination=str(getattr(route, '到着位置', "未設定")),
-        dep_time=str(getattr(route, '出発時間', "不明")),
-        arr_time=str(getattr(route, '到着時間', "不明")),
-        price=int(getattr(drive, '運賃', 0) or 0),
-        capacity=int(getattr(drive, '募集人数', 0) or 0),
-        description=str(getattr(profile, 'プロフィール文', "よろしくお願いします！")),
-        status=str(getattr(drive, '募集状況', "1"))
+        drive_id=drive.recruitment_id,
+        driver_name=getattr(driver, 'name', "不明"),
+        origin=str(getattr(route, 'dep_point', "未設定")),
+        destination=str(getattr(route, 'arr_point', "未設定")),
+        dep_time=str(getattr(route, 'dep_time', "不明")),
+        arr_time=str(getattr(route, 'arr_time', "不明")),
+        price=getattr(drive, 'fare', 0),
+        capacity=getattr(drive, 'capacity', 0),
+        description=getattr(profile, 'bio', "よろしくお願いします！"),
+        status=str(getattr(drive, 'status', "1"))
     )
