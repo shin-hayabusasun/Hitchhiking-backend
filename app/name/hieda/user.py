@@ -138,19 +138,14 @@ async def login(
 
 @router.post("/regist", response_model=RegistResponse)
 async def regist(user: UserRegist, db: Session = Depends(get_db)):
-    """
-    新規ユーザー登録API
-    フロントエンドの配列形式（name, barthday, adress）と
-    Base64画像データ（プレフィックス付き）に対応
-    """
     try:
-        # 1. 名前の結合 (例: ["山田", "太郎"] -> "山田 太郎")
+        # 1. 名前の結合
         full_name = " ".join(user.name)
         
-        # 2. 住所の結合 (例: ["123-4567", "東京都", ...] -> "123-4567 東京都 ...")
+        # 2. 住所の結合
         full_address = " ".join(user.adress)
         
-        # 3. 生年月日の変換 (例: [2025, 1, 1] -> date型)
+        # 3. 生年月日の変換
         try:
             birth_date = date(user.barthday[0], user.barthday[1], user.barthday[2])
         except (IndexError, ValueError):
@@ -160,16 +155,12 @@ async def regist(user: UserRegist, db: Session = Depends(get_db)):
         hashed_password = hashlib.sha256(user.password.encode()).hexdigest()
         
         # 5. identification (Base64) の処理
-        # FileReader.readAsDataURL の結果は "data:image/png;base64,iVBOR..." となるため、
-        # カンマより後ろの純粋なデータ部分のみを抽出する
         try:
             if "," in user.identification:
-                # プレフィックス(data:image/xxx;base64,)を切り捨てる
                 header, encoded = user.identification.split(",", 1)
             else:
                 encoded = user.identification
-            #identity_doc_binary = base64.b64decode(encoded)
-            identity_doc_binary= encoded.encode('utf-8')  # バイナリとして保存
+            identity_doc_binary = encoded.encode('utf-8') 
         except Exception:
             raise HTTPException(status_code=400, detail="本人確認書類のデータが不正です")
         
@@ -178,14 +169,27 @@ async def regist(user: UserRegist, db: Session = Depends(get_db)):
             name=full_name,
             email=user.mail,
             password=hashed_password,
-            gender=user.sex, # フロントから 1(男性) or 0(女性) が来る
+            gender=user.sex,
             birth_date=birth_date,
             address=full_address,
             identity_doc=identity_doc_binary
         )
         
         db.add(new_user)
-        db.flush() # IDを確定させるために一旦反映（commitはまだしない）
+        db.flush() # user_id を確定させる
+
+        # --- PassengerProfile の登録 ---
+        passenger_profile = modelDB.PassengerProfile(
+            user_id=new_user.user_id,
+            ride_count=0,
+            rating=0.0,
+            reg_date=date.today(),
+            bio="",
+            latitude=None,
+            longitude=None,
+            embedding=None
+        )
+        db.add(passenger_profile)
         
         # 7. 運転者としても登録する場合 (isdriver == 1)
         if user.isdriver == 1:
@@ -199,22 +203,28 @@ async def regist(user: UserRegist, db: Session = Depends(get_db)):
                 car_model="未設定",
                 car_color="未設定",
                 car_year="未設定",
-                car_number="未設定"
+                car_number="未設定",
+                # --- 最新の定義に合わせて追加 ---
+                no_smoking=True,   # デフォルト値を設定
+                pet_ok=False,
+                food_ok=False,
+                music_ok=True,
+                latitude=None,
+                longitude=None,
+                bio="",
+                embedding=None
+                # ------------------------------
             )
             db.add(driver_profile)
         
-        # 最後にまとめてコミット（一貫性を保つため）
+        # 最後にまとめてコミット
         db.commit()
         return RegistResponse(ok=True)
-        
-    except IntegrityError:
-        db.rollback()
-        # メールアドレスの重複など
-        raise HTTPException(status_code=400, detail="このメールアドレスは既に登録されています")
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"予期せぬエラーが発生しました: {str(e)}")
 
+    except Exception as e:
+        db.rollback() 
+        print(f"Registration error: {e}")
+        raise HTTPException(status_code=500, detail="サーバーエラーが発生しました")
 
 @router.get("/logout")
 def logout(

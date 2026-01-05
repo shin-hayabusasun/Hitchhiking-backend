@@ -1,18 +1,23 @@
-from fastapi import APIRouter, Depends, HTTPException, Response, Request
-from sqlalchemy.orm import Session
-from sqlalchemy import and_, extract, cast, Date, Time
-from pydantic import BaseModel
-from typing import Optional, List
-from datetime import datetime
+import logging
 import json
 import math
-from geopy.geocoders import Nominatim
-from geopy.exc import GeocoderTimedOut
+from datetime import datetime
+from typing import Optional, List
 
-# 自作モジュール（既存の設定を反映）
+from fastapi import APIRouter, Depends, HTTPException, Request
+from sqlalchemy.orm import Session
+from sqlalchemy import extract, cast, Date
+from pydantic import BaseModel
+from geopy.geocoders import Nominatim
+
+# 自作モジュール
 import modelDB
 from db_setting import SessionLocal
 from .user import get_current_user
+
+# --- ログの設定 ---
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/hitchhiker", tags=["hitchhikersearch"])
 
@@ -24,7 +29,8 @@ def get_db():
     finally:
         db.close()
 
-# --- Pydanticモデル定義 ---
+# --- Pydanticモデル定義 (NameError回避のため、使用される順序で定義) ---
+
 class CarCondition(BaseModel):
     jouken_name: str
 
@@ -80,7 +86,8 @@ def get_coordinates(address: str):
         location = geocoder.geocode(f"{address}, Japan")
         if location:
             return location.latitude, location.longitude
-    except:
+    except Exception as e:
+        logger.error(f"ジオコーディングエラー ({address}): {e}")
         return None, None
     return None, None
 
@@ -91,7 +98,7 @@ def get_min_distance_to_path(point_p, path_points):
     min_dist_sq = float('inf')
     closest_index = -1
     
-    if not path_points or not point_p[0]:
+    if not path_points or point_p[0] is None:
         return min_dist_sq, closest_index
         
     for i, pt in enumerate(path_points):
@@ -107,25 +114,34 @@ def get_min_distance_to_path(point_p, path_points):
 
 @router.post("/boshukensaku", response_model=cardresponse)
 async def search_recruitments(req: Req, request: Request, db: Session = Depends(get_db)):
+    logger.info("=== 検索デバッグ開始 ===")
+    
     # 1. 認証チェック
     session_id = request.cookies.get("session_id")
     if not session_id:
+        logger.warning("セッションIDがクッキーにありません")
         raise HTTPException(status_code=401, detail="Session not found")
 
     user_id = get_current_user(session_id=session_id, db=db)
     if user_id == "no":
+        logger.warning(f"無効なセッションIDです: {session_id}")
         raise HTTPException(status_code=401, detail="Invalid session")
+    
+    logger.info(f"ログインユーザーID: {user_id}")
 
     # 2. 地名から座標を取得
     f = req.filter
+    logger.info(f"入力フィルタ: 出発={f.departure}, 到着={f.destination}, 日付={f.date}")
+    
     p_start = get_coordinates(f.departure)
     p_end = get_coordinates(f.destination)
+    logger.info(f"取得座標: 出発={p_start}, 到着={p_end}")
 
-    # 座標が取得できない場合は、空間フィルタリングをスキップするために空リストを返却
     if p_start[0] is None or p_end[0] is None:
+        logger.warning("座標の取得に失敗したため、検索を中断します")
         return cardresponse(card=[])
 
-    # 3. 基本クエリ作成 (3つのテーブルを結合)
+    # 3. 基本クエリ作成
     query = db.query(modelDB.Recruitment).join(
         modelDB.Route, 
         modelDB.Recruitment.route_id == modelDB.Route.route_id
@@ -133,50 +149,58 @@ async def search_recruitments(req: Req, request: Request, db: Session = Depends(
         modelDB.DriverProfile,
         modelDB.Recruitment.recruiter_user_id == modelDB.DriverProfile.user_id
     )
+    
+    logger.info(f"DB初期全件数: {query.count()}件")
 
-    # --- SQLフィルタリング ---
+    # --- SQLフィルタリング段階のログ ---
     # ① 運賃
     if f.priceRange.min is not None:
         query = query.filter(modelDB.Recruitment.fare >= f.priceRange.min)
     if f.priceRange.max is not None:
         query = query.filter(modelDB.Recruitment.fare <= f.priceRange.max)
+    logger.info(f"運賃フィルタ適用後: {query.count()}件")
 
     # ② 必要な座席数
     query = query.filter(modelDB.Recruitment.capacity >= f.seats)
+    logger.info(f"座席数({f.seats}以上)適用後: {query.count()}件")
 
     # ③ 日付
     if f.date:
         target_date = datetime.strptime(f.date, '%Y-%m-%d').date()
         query = query.filter(cast(modelDB.Route.dep_time, Date) == target_date)
+        logger.info(f"日付({target_date})適用後: {query.count()}件")
 
     # ④ 時間帯
     if f.timeRange:
         start_hour = int(f.timeRange.start.split(":")[0])
         end_hour = int(f.timeRange.end.split(":")[0])
         query = query.filter(extract('hour', modelDB.Route.dep_time).between(start_hour, end_hour))
+        logger.info(f"時間帯({start_hour}-{end_hour}時)適用後: {query.count()}件")
 
-    # ⑤ 状態・タイプ (募集中=1, 運転者からの募集=0 と仮定)
+    # ⑤ 状態・タイプ (募集中=1, 運転者からの募集=0)
     query = query.filter(modelDB.Recruitment.status == 1)
     query = query.filter(modelDB.Recruitment.type == 0)
+    logger.info(f"ステータス(募集中/運転者)適用後: {query.count()}件")
 
     # ⑥ 車両条件
     c = f.conditions
-    conditions_map = [
-        (c.nonSmoking, modelDB.DriverProfile.no_smoking),
-        (c.petsAllowed, modelDB.DriverProfile.pet_ok),
-        (c.foodAllowed, modelDB.DriverProfile.food_ok),
-        (c.musicAllowed, modelDB.DriverProfile.music_ok),
+    conditions_list = [
+        (c.nonSmoking, modelDB.DriverProfile.no_smoking, "禁煙"),
+        (c.petsAllowed, modelDB.DriverProfile.pet_ok, "ペット"),
+        (c.foodAllowed, modelDB.DriverProfile.food_ok, "飲食"),
+        (c.musicAllowed, modelDB.DriverProfile.music_ok, "音楽"),
     ]
-    for filter_val, db_column in conditions_map:
-        if filter_val is not None:
-            query = query.filter(db_column == filter_val)
+    for filter_val, db_column, label in conditions_list:
+        if filter_val: # Trueの場合のみ絞り込む
+            query = query.filter(db_column == True)
+            logger.info(f"車両条件({label})適用後: {query.count()}件")
 
     # --- Python側での詳細な経路解析 ---
-    results = query.all()
+    sql_results = query.all()
     response_cards = []
 
-    for r in results:
-        # Route, User, DriverProfileの取得
+    for r in sql_results:
+        # 関連情報の取得
         route_info = db.query(modelDB.Route).filter(modelDB.Route.route_id == r.route_id).first()
         user_info = db.query(modelDB.User).filter(modelDB.User.user_id == r.recruiter_user_id).first()
         driver_info = db.query(modelDB.DriverProfile).filter(modelDB.DriverProfile.user_id == r.recruiter_user_id).first()
@@ -188,7 +212,6 @@ async def search_recruitments(req: Req, request: Request, db: Session = Depends(
             path_points = []
 
         if not path_points:
-            # path_dataがない場合は出発・到着の2点のみで線分近似
             path_points = [
                 [float(route_info.dep_latitude), float(route_info.dep_longitude)],
                 [float(route_info.arr_latitude), float(route_info.arr_longitude)]
@@ -198,18 +221,28 @@ async def search_recruitments(req: Req, request: Request, db: Session = Depends(
         dist_start_sq, idx_start = get_min_distance_to_path(p_start, path_points)
         dist_end_sq, idx_end = get_min_distance_to_path(p_end, path_points)
 
-        # 順序チェック (ドライバーがユーザーの出発地を先に通過するか)
+        # 順序チェック
         is_order_ok = idx_start < idx_end
         
-        # マッチスコア計算 (0.01 = 約1.1km)
-        # ユークリッド距離の合計に基づく減点方式
-        similarity_score = 100 - (math.sqrt(dist_start_sq) + math.sqrt(dist_end_sq)) * 1000
+        # マッチスコア計算 (ユークリッド距離合計に基づく)
+        dist_total = math.sqrt(dist_start_sq) + math.sqrt(dist_end_sq)
+        similarity_score = 100 - (dist_total * 1000)
         
-        # 順序が逆、または距離が遠すぎる(マッチ率60%未満)場合は除外
-        if not is_order_ok or similarity_score < 60:
+        # 各募集の詳細デバッグログ
+        log_prefix = f"[Recruitment ID: {r.recruitment_id} / Driver: {user_info.name if user_info else '??'}]"
+        logger.info(f"{log_prefix} Score: {similarity_score:.2f}, StartIdx: {idx_start}, EndIdx: {idx_end}, Order: {is_order_ok}")
+
+        # 判定
+        if not is_order_ok:
+            logger.info(f"  -> 除外: 通過順序が不正です (Start:{idx_start} >= End:{idx_end})")
+            continue
+        if similarity_score < 60:
+            logger.info(f"  -> 除外: スコア不足 ({similarity_score:.2f} < 60)")
             continue
 
-        # 車両条件ラベル作成
+        logger.info(f"  -> 採用！")
+
+        # 車両条件ラベル
         current_car_jouken = []
         if driver_info:
             if driver_info.no_smoking: current_car_jouken.append(CarCondition(jouken_name="禁煙"))
@@ -217,7 +250,6 @@ async def search_recruitments(req: Req, request: Request, db: Session = Depends(
             if driver_info.food_ok: current_car_jouken.append(CarCondition(jouken_name="飲食OK"))
             if driver_info.music_ok: current_car_jouken.append(CarCondition(jouken_name="音楽OK"))
 
-        # レスポンスカードの作成
         response_cards.append(DriveItem(
             id=str(r.recruitment_id),
             name=user_info.name if user_info else "不明なユーザー",
@@ -226,13 +258,14 @@ async def search_recruitments(req: Req, request: Request, db: Session = Depends(
             date=route_info.dep_time.strftime('%Y-%m-%d %H:%M') if route_info else "",
             money=r.fare,
             people=r.capacity,
-            match=int(similarity_score),  # 計算した経路マッチ率
+            match=int(similarity_score),
             carinfo=f"{driver_info.car_model} ({driver_info.car_color})" if driver_info else "登録車両なし",
             state="募集中",
             car_jouken=current_car_jouken 
         ))
 
-    # マッチ率が高い順にソート
+    # スコア順にソート
     response_cards.sort(key=lambda x: x.match if x.match else 0, reverse=True)
+    logger.info(f"=== 最終返却件数: {len(response_cards)}件 ===")
 
     return cardresponse(card=response_cards)

@@ -38,10 +38,10 @@ from app.name.hieda import drive
 app.include_router(drive.router)
 from app.name.hieda import driverreq
 app.include_router(driverreq.router)
-
-
-
-
+from app.name.tadokoro import mypagekaito
+app.include_router(mypagekaito.router)
+from app.name.tadokoro import createboshu
+app.include_router(createboshu.router)
 
 
 
