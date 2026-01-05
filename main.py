@@ -51,11 +51,11 @@ app.include_router(driverreq.router)
 
 #ユーザー関連エンドポイントインポート 田所start 52行
 
+from app.name.tadokoro import mydrive  # 1. 作成したファイルをインポート（パスは実際の場所に合わせる）
+app.include_router(mydrive.router)     # 2. ルーターをアプリに登録
 
 
  
-
-
 
 
 
