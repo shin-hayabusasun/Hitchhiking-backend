@@ -112,12 +112,12 @@ app.include_router(user.router)
 
 #ユーザー関連エンドポイントインポート のりstart 113行
 
+from app.name.nori import orders  # ユーザー関連エンドポイントインポート
 
+# 商品・在庫・注文管理API
+app.include_router(orders.router)
 
  
-
-
-
 
 
 
