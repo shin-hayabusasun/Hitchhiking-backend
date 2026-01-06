@@ -53,7 +53,8 @@ app.include_router(createboshu.router)
 
 from app.name.tadokoro import mydrive  # 1. 作成したファイルをインポート（パスは実際の場所に合わせる）
 app.include_router(mydrive.router)     # 2. ルーターをアプリに登録
-
+from app.name.tadokoro import my_requests
+app.include_router(my_requests.router)
 
  
 
