@@ -90,11 +90,11 @@ app.include_router(my_requests.router)
 
 
 #ユーザー関連エンドポイントインポート ひかるstart 91行
-
+from app.name.komastuhikaru import drives # このパスは実際のファイル構成に合わせてください
+app.include_router(drives.router)
 
 
  
-
 
 
 
