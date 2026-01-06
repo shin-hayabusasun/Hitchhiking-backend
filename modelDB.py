@@ -148,7 +148,8 @@ class Order(Base):
     product_id = Column(Integer, ForeignKey("products.product_id"), nullable=False)
     order_date = Column(DateTime, nullable=False)
     user_id = Column(Integer, ForeignKey("users.user_id"), nullable=False)
-
+    # ★追加: ステータス管理用 (pending, shipped, delivered)
+    status = Column(String(20), nullable=False, default="pending")
 
 # 商品テーブル
 class Product(Base):
@@ -158,3 +159,6 @@ class Product(Base):
     name = Column(String(50), nullable=False)
     stock = Column(Integer, nullable=False, default=0)
     reg_date = Column(DateTime, nullable=False, default=datetime.now)
+    # ★追加: ポイント交換機能用
+    points = Column(Integer, nullable=False, default=0)
+    description = Column(String, nullable=True)
