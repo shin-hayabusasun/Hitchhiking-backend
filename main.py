@@ -66,9 +66,10 @@ app.include_router(my_requests.router)
 
 
 
-#ユーザー関連エンドポイントインポート 田所end 69行
 
-#ユーザー関連エンドポイントインポート 黒星start 71行 
+#ユーザー関連エンドポイントインポート 田所end 70行
+
+#ユーザー関連エンドポイントインポート 黒星start 72行 
 
 
 
@@ -85,10 +86,10 @@ app.include_router(tyumon.router)
 from app.name.koroboshi import orderhis  # ユーザー関連エンドポイントインポート
 app.include_router(orderhis.router)
 
-#ユーザー関連エンドポイントインポート 黒星end 88行
+#ユーザー関連エンドポイントインポート 黒星end 89行
 
 
-#ユーザー関連エンドポイントインポート ひかるstart 91行
+#ユーザー関連エンドポイントインポート ひかるstart 92行
 from app.name.komastuhikaru import drives # このパスは実際のファイル構成に合わせてください
 app.include_router(drives.router)
 
@@ -105,12 +106,12 @@ app.include_router(drives.router)
 
 
 
-#ユーザー関連エンドポイントインポート ヒカルend 108行
+#ユーザー関連エンドポイントインポート ヒカルend 109行
 
 
 
 
-#ユーザー関連エンドポイントインポート のりstart 113行
+#ユーザー関連エンドポイントインポート のりstart 114行
 
 from app.name.nori import orders  # ユーザー関連エンドポイントインポート
 
@@ -127,9 +128,9 @@ app.include_router(orders.router)
 
 
 
-#ユーザー関連エンドポイントインポート のりend 130行
+#ユーザー関連エンドポイントインポート のりend 131行
 
-#ユーザー関連エンドポイントインポート 五藤start 132行
+#ユーザー関連エンドポイントインポート 五藤start 133行
 
 
 
@@ -146,7 +147,7 @@ app.include_router(orders.router)
 
 
 
-#ユーザー関連エンドポイントインポート 五藤end 149行
+#ユーザー関連エンドポイントインポート 五藤end 150行
 
 @app.get("/")
 async def root():
