@@ -42,10 +42,10 @@ from app.name.tadokoro import mypagekaito
 app.include_router(mypagekaito.router)
 from app.name.tadokoro import createboshu
 app.include_router(createboshu.router)
-
-
-
-
+from app.name.koroboshi import product
+from app.name.koroboshi import testproduct
+app.include_router(product.router)
+app.include_router(testproduct.router)
 
 #ユーザー関連エンドポイントインポート 稗田end　50行
 
@@ -56,7 +56,6 @@ app.include_router(mydrive.router)     # 2. ルーターをアプリに登録
 from app.name.tadokoro import my_requests
 app.include_router(my_requests.router)
 
- 
 
 
 
@@ -79,12 +78,12 @@ app.include_router(my_requests.router)
 
 
 
-
-
-
-
-
-
+from app.name.koroboshi import pointsshutoku  # ユーザー関連エンドポイントインポート
+app.include_router(pointsshutoku.router)
+from app.name.koroboshi import tyumon  # ユーザー関連エンドポイントインポート
+app.include_router(tyumon.router)
+from app.name.koroboshi import orderhis  # ユーザー関連エンドポイントインポート
+app.include_router(orderhis.router)
 
 #ユーザー関連エンドポイントインポート 黒星end 88行
 
