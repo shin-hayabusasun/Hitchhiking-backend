@@ -190,6 +190,15 @@ async def regist(user: UserRegist, db: Session = Depends(get_db)):
             embedding=None
         )
         db.add(passenger_profile)
+
+        # ★★★ 追加: UserBalance (初期ポイント100pt) の登録 ★★★
+        user_balance = modelDB.UserBalance(
+            user_id=new_user.user_id,
+            point_balance=100,  # 新規登録特典として100pt付与
+            sales_history=0    # 売上履歴は0で初期化
+        )
+        db.add(user_balance)
+        # ★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★
         
         # 7. 運転者としても登録する場合 (isdriver == 1)
         if user.isdriver == 1:
@@ -204,8 +213,7 @@ async def regist(user: UserRegist, db: Session = Depends(get_db)):
                 car_color="未設定",
                 car_year="未設定",
                 car_number="未設定",
-                # --- 最新の定義に合わせて追加 ---
-                no_smoking=True,   # デフォルト値を設定
+                no_smoking=True,
                 pet_ok=False,
                 food_ok=False,
                 music_ok=True,
@@ -213,7 +221,6 @@ async def regist(user: UserRegist, db: Session = Depends(get_db)):
                 longitude=None,
                 bio="",
                 embedding=None
-                # ------------------------------
             )
             db.add(driver_profile)
         
