@@ -55,8 +55,8 @@ from app.name.tadokoro import mydrive  # 1. 作成したファイルをインポ
 app.include_router(mydrive.router)     # 2. ルーターをアプリに登録
 from app.name.tadokoro import my_requests
 app.include_router(my_requests.router)
-
-
+from app.name.tadokoro import create_drive # ← ファイル名と一致しているか
+app.include_router(create_drive.router)     # ← router変数を読み込んでいるか
 
 
 
