@@ -8,7 +8,7 @@ import sys
 sys.path.append('..')
 from db_setting import SessionLocal
 import modelDB
-from app.name.hieda import get_current_user
+from app.name.hieda.user import get_current_user
 
 # ルーター定義 (prefixは機能に合わせて設定)
 router = APIRouter(prefix="/api/drives", tags=["drives"])
