@@ -9,7 +9,8 @@ from datetime import datetime
 import modelDB
 from db_setting import SessionLocal 
 
-router = APIRouter()
+# router = APIRouter()
+router = APIRouter(prefix="/api/admin/products", tags=["admin_Products"])
 
 # --- DB接続用 ---
 def get_db():
@@ -31,7 +32,7 @@ class ProductCreate(BaseModel):
 
 # 1. 商品一覧取得 (GET)
 # @router.get("/api/points/products")
-@router.get("/api/nori/products")
+@router.get("")
 def get_products(db: Session = Depends(get_db)):
     # 登録日が新しい順に取得
     products = db.query(modelDB.Product).order_by(modelDB.Product.reg_date.desc()).all()
@@ -49,7 +50,7 @@ def get_products(db: Session = Depends(get_db)):
     return {"products": results}
 
 # 2. 商品新規登録 (POST)
-@router.post("/api/nori/products")
+@router.post("")
 def create_product(item: ProductCreate, db: Session = Depends(get_db)):
     new_product = modelDB.Product(
         name=item.name,
@@ -64,7 +65,7 @@ def create_product(item: ProductCreate, db: Session = Depends(get_db)):
     return {"message": "Created", "id": str(new_product.product_id)}
 
 # 3. 商品編集 (PUT)
-@router.put("/api/nori/products/{product_id}")
+@router.put("/{product_id}")
 def update_product(product_id: int, item: ProductCreate, db: Session = Depends(get_db)):
     product = db.query(modelDB.Product).filter(modelDB.Product.product_id == product_id).first()
     if not product:
@@ -80,7 +81,7 @@ def update_product(product_id: int, item: ProductCreate, db: Session = Depends(g
     return {"message": "Updated"}
 
 # 4. 商品削除 (DELETE)
-@router.delete("/api/nori/products/{product_id}")
+@router.delete("/{product_id}")
 def delete_product(product_id: int, db: Session = Depends(get_db)):
     product = db.query(modelDB.Product).filter(modelDB.Product.product_id == product_id).first()
     if not product:

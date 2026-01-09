@@ -92,10 +92,7 @@ app.include_router(orderhis.router)
 #ユーザー関連エンドポイントインポート ひかるstart 92行
 from app.name.komastuhikaru import drives # このパスは実際のファイル構成に合わせてください
 app.include_router(drives.router)
-from app.name.komastuhikaru import driver_requests
-app.include_router(driver_requests.router)
-from app.name.komastuhikaru import applications
-app.include_router(applications.router)
+
 
  
 
@@ -120,13 +117,13 @@ from app.name.nori import Products  # ユーザー関連エンドポイントイ
 # 商品・在庫・注文管理API
 app.include_router(Products.router)
 
+from app.name.nori import Stocks  # ★追加: Stockをインポート
+# ★追加: 在庫管理API
+app.include_router(Stocks.router)
+ 
+from app.name.nori import Orders  # ★追加: Ordersをインポート
 
-
-
-
-
-
-
+app.include_router(Orders.router) # ★追加: ルーターを登録
 
 
 
