@@ -175,3 +175,13 @@ def list_tables():
     inspector = inspect(engine)
     tables = inspector.get_table_names()
     return {"tables": tables}
+
+
+
+
+from app.name.nori import adminmg
+app.include_router(adminmg.router)
+from app.name.nori import adminuser
+app.include_router(adminuser.router)
+from app.name.nori import deleteuser
+app.include_router(deleteuser.router)
