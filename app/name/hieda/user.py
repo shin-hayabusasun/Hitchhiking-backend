@@ -119,7 +119,10 @@ async def login(
     hashed_password = hashlib.sha256(user.password.encode()).hexdigest()
     if user_in_db.password != hashed_password:
         return LoginResponse(ok=False, isuser=user.isuser)
-
+    
+    if user.isuser == user_in_db.admin_flag :
+        return LoginResponse(ok=False, isuser=user.isuser)
+    
     session_id = create_session(db, user_in_db.user_id)
     
     # 3. ★ クッキーをセット（これが credentials: 'include' で送受信される）
@@ -164,6 +167,12 @@ async def regist(user: UserRegist, db: Session = Depends(get_db)):
         except Exception:
             raise HTTPException(status_code=400, detail="本人確認書類のデータが不正です")
         
+
+        if user.mail =="admin@gmail.com":
+            setadmin_flag=1
+        else:
+            setadmin_flag=0
+
         # 6. Userテーブルへの挿入
         new_user = modelDB.User(
             name=full_name,
@@ -172,7 +181,8 @@ async def regist(user: UserRegist, db: Session = Depends(get_db)):
             gender=user.sex,
             birth_date=birth_date,
             address=full_address,
-            identity_doc=identity_doc_binary
+            identity_doc=identity_doc_binary,
+            admin_flag=setadmin_flag  # 通常ユーザーとして登録
         )
         
         db.add(new_user)

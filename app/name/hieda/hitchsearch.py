@@ -253,8 +253,8 @@ async def search_recruitments(req: Req, request: Request, db: Session = Depends(
         response_cards.append(DriveItem(
             id=str(r.recruitment_id),
             name=user_info.name if user_info else "不明なユーザー",
-            start=f.departure,
-            end=f.destination,
+            start=route_info.depname,
+            end=route_info.arrname,
             date=route_info.dep_time.strftime('%Y-%m-%d %H:%M') if route_info else "",
             money=r.fare,
             people=r.capacity,
