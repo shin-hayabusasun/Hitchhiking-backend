@@ -131,8 +131,8 @@ app.include_router(Orders.router) # ★追加: ルーターを登録
 #ユーザー関連エンドポイントインポート のりend 131行
 
 #ユーザー関連エンドポイントインポート 五藤start 133行
-
-
+from app.name.goto import settings
+app.include_router(settings.router)
 
  
 
