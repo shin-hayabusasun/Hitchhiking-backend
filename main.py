@@ -57,8 +57,8 @@ from app.name.tadokoro import my_requests
 app.include_router(my_requests.router)
 from app.name.tadokoro import create_drive # ← ファイル名と一致しているか
 app.include_router(create_drive.router)     # ← router変数を読み込んでいるか
-
-
+from app.name.tadokoro import driverhensyu # ← ファイル名と一致しているか
+app.include_router(driverhensyu.router)  
 
 
 
@@ -172,3 +172,13 @@ def list_tables():
     inspector = inspect(engine)
     tables = inspector.get_table_names()
     return {"tables": tables}
+
+
+
+
+from app.name.nori import adminmg
+app.include_router(adminmg.router)
+from app.name.nori import adminuser
+app.include_router(adminuser.router)
+from app.name.nori import deleteuser
+app.include_router(deleteuser.router)
