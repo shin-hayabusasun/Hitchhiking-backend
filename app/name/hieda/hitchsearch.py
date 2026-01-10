@@ -177,8 +177,8 @@ async def search_recruitments(req: Req, request: Request, db: Session = Depends(
         query = query.filter(extract('hour', modelDB.Route.dep_time).between(start_hour, end_hour))
         logger.info(f"時間帯({start_hour}-{end_hour}時)適用後: {query.count()}件")
 
-    # ⑤ 状態・タイプ (募集中=1, 運転者からの募集=0)
-    query = query.filter(modelDB.Recruitment.status == 1)
+    # ⑤ 状態・タイプ (募集中=0, 運転者からの募集=0)
+    query = query.filter(modelDB.Recruitment.status == 0)
     query = query.filter(modelDB.Recruitment.type == 0)
     logger.info(f"ステータス(募集中/運転者)適用後: {query.count()}件")
 
