@@ -26,6 +26,8 @@ class User(Base):
     birth_date = Column(Date, nullable=False)
     address = Column(String(100), nullable=False)
     identity_doc = Column(BYTEA, nullable=False)  # 本人確認書類データ
+    #★追加
+    admin_flag = Column(Integer, nullable=False, default=0)  # 管理者権限フラグ 1:管理者,0:一般ユーザー
 
 
 # 運転者情報テーブル
@@ -84,6 +86,9 @@ class Route(Base):
     # 到着地点（緯度・経度）
     arr_latitude = Column(Numeric(10, 8), nullable=False)
     arr_longitude = Column(Numeric(11, 8), nullable=False)
+    #★追加
+    arrname = Column(String(100), nullable=False)  # 到着地点名称
+    depname = Column(String(100), nullable=False)  # 出発地点名称
 
 
 # 募集管理テーブル
@@ -172,3 +177,12 @@ class NotificationSetting(Base):
     message = Column(Boolean, default=True)       # メッセージ受信
     reminder = Column(Boolean, default=True)      # リマインド
     promotion = Column(Boolean, default=False)    # お得な情報
+    
+class notification(Base):
+    __tablename__ = "notifications"
+
+    notification_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.user_id"), nullable=False)
+    message = Column(String, nullable=False)
+    is_read = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime, nullable=False, default=datetime.now)
