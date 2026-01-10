@@ -55,7 +55,7 @@ class IdentityDocumentRequest(BaseModel):
     identification: str  # Hiedaさんの UserRegist と名前を合わせています
 
 # --- 通知設定更新 ---
-class NotificationUpdateRequest(BaseModel):
+class NotificationSettingsSchema(BaseModel):
     rideRequest: bool
     message: bool
     reminder: bool
@@ -210,13 +210,13 @@ async def upload_identity_document(
 
     return SuccessResponse(success=True)
 
-# 通知設定
-@router.put("/settings/notifications", response_model=MessageResponse)
-async def update_notifications(
-    settings: NotificationUpdateRequest, 
-    request: Request, 
-    db: Session = Depends(get_db)
-):
+# ==========================================
+# 通知設定 API
+# ==========================================
+
+# 1. 通知設定を取得する（@router.get を必ず付ける！）
+@router.get("/users/me/notifications", response_model=NotificationSettingsSchema)
+async def get_notifications(request: Request, db: Session = Depends(get_db)): # 名前を get_notifications に変更
     session_id = request.cookies.get("session_id")
     if not session_id:
         raise HTTPException(status_code=401, detail="No session")
@@ -226,21 +226,54 @@ async def update_notifications(
         raise HTTPException(status_code=401, detail="Invalid session")
 
     user_id = int(res)
-    target_user = db.query(modelDB.User).filter(modelDB.User.user_id == user_id).first()
-
-    if not target_user:
-        raise HTTPException(status_code=404, detail="User not found")
-
-    # 設定の更新
-    target_user.notify_ride_request = settings.rideRequest
-    target_user.notify_message = settings.message
-    target_user.notify_reminder = settings.reminder
-    target_user.notify_promotion = settings.promotion
-
-    try:
+    
+    # 通知設定テーブルを検索
+    notif = db.query(modelDB.NotificationSetting).filter(modelDB.NotificationSetting.user_id == user_id).first()
+    
+    # もしレコードがなければ（初めての設定なら）、すべてオフで作成する
+    if not notif:
+        notif = modelDB.NotificationSetting(
+            user_id=user_id,
+            ride_request=False,
+            message=False,
+            reminder=False,
+            promotion=False
+        )
+        db.add(notif)
         db.commit()
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail="Save failed")
+        db.refresh(notif)
 
-    return MessageResponse(message="通知設定を更新しました")
+    return {
+        "rideRequest": notif.ride_request,
+        "message": notif.message,
+        "reminder": notif.reminder,
+        "promotion": notif.promotion
+    }
+
+# 2. 通知設定を更新する（ここは PUT のままでOK）
+@router.put("/users/me/notifications")
+async def update_notifications(settings: NotificationSettingsSchema, request: Request, db: Session = Depends(get_db)):
+    session_id = request.cookies.get("session_id")
+    if not session_id:
+        raise HTTPException(status_code=401, detail="No session")
+
+    res = get_current_user(session_id=session_id, db=db)
+    if res == "no":
+        raise HTTPException(status_code=401, detail="Invalid session")
+
+    user_id = int(res)
+    
+    notif = db.query(modelDB.NotificationSetting).filter(modelDB.NotificationSetting.user_id == user_id).first()
+    
+    if not notif:
+        notif = modelDB.NotificationSetting(user_id=user_id)
+        db.add(notif)
+
+    # 送られてきた値で上書き保存
+    notif.ride_request = settings.rideRequest
+    notif.message = settings.message
+    notif.reminder = settings.reminder
+    notif.promotion = settings.promotion
+    
+    db.commit()
+    return {"message": "success"}

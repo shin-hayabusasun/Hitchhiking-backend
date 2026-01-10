@@ -162,3 +162,13 @@ class Product(Base):
     # ★追加: ポイント交換機能用
     points = Column(Integer, nullable=False, default=0)
     description = Column(String, nullable=True)
+
+# 追加　通知設定テーブル
+class NotificationSetting(Base):
+    __tablename__ = "notification_settings"
+
+    user_id = Column(Integer, ForeignKey("users.user_id"), primary_key=True)
+    ride_request = Column(Boolean, default=True)  # 相乗りリクエスト
+    message = Column(Boolean, default=True)       # メッセージ受信
+    reminder = Column(Boolean, default=True)      # リマインド
+    promotion = Column(Boolean, default=False)    # お得な情報
