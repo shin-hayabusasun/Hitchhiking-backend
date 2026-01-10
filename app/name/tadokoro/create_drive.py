@@ -1,4 +1,3 @@
-# % Start(AI Assistant)
 import sys
 import json
 import requests
@@ -49,21 +48,14 @@ def get_actual_route(start_lat, start_lon, end_lat, end_lon):
     return [[start_lat, start_lon], [end_lat, end_lon]], 10800
 
 # スキーマ
-class VehicleRules(BaseModel):
-    noSmoking: bool
-    petAllowed: bool
-    foodAllowed: bool
-    musicAllowed: bool
-
 class DriveCreateRequest(BaseModel):
-    departure: str
-    destination: str
+    departure: str      # 地名
+    destination: str    # 地名
     departureDate: str
     departureTime: str
     capacity: int
     fee: int
     message: str
-    vehiclerules: VehicleRules
 
 class DriveResponse(BaseModel):
     ok: bool
@@ -83,7 +75,7 @@ async def regist_drive(data: DriveCreateRequest, request: Request, db: Session =
     dep_lat, dep_lon = get_coordinates(data.departure)
     arr_lat, arr_lon = get_coordinates(data.destination)
     if dep_lat is None or arr_lat is None:
-        raise HTTPException(status_code=400, detail="地点の座標取得に失敗しました")
+        raise HTTPException(status_code=400, detail="地点の座標特定に失敗しました。具体的な住所や駅名を入力してください。")
 
     path_points, duration_sec = get_actual_route(dep_lat, dep_lon, arr_lat, arr_lon)
     
@@ -91,7 +83,7 @@ async def regist_drive(data: DriveCreateRequest, request: Request, db: Session =
         dep_dt = datetime.strptime(f"{data.departureDate} {data.departureTime}", "%Y-%m-%d %H:%M")
         arr_dt = dep_dt + timedelta(seconds=duration_sec)
 
-        # 3. Route(経路)の登録
+        # 3. Route(経路)の登録（depname, arrnameを保存）
         new_route = modelDB.Route(
             recruiter_user_id=user_id,
             path_data=json.dumps(path_points),
@@ -100,32 +92,33 @@ async def regist_drive(data: DriveCreateRequest, request: Request, db: Session =
             dep_longitude=dep_lon,
             arr_time=arr_dt,
             arr_latitude=arr_lat,
-            arr_longitude=arr_lon
+            arr_longitude=arr_lon,
+            depname=data.departure,  # ★地名を保存
+            arrname=data.destination  # ★地名を保存
         )
         db.add(new_route)
         db.flush()
 
-        # 4. DriverProfile(車両ルール等)の更新
-        # 既存のプロフィールがあるか確認し、ルールを更新する
+        # 4. プロフィールからルールを取得
         profile = db.query(modelDB.DriverProfile).filter(modelDB.DriverProfile.user_id == user_id).first()
-        if profile:
-            profile.no_smoking = data.vehiclerules.noSmoking
-            profile.pet_ok = data.vehiclerules.petAllowed
-            profile.food_ok = data.vehiclerules.foodAllowed
-            profile.music_ok = data.vehiclerules.musicAllowed
-            # 募集時の現在地として出発地を保存（任意）
-            profile.latitude = dep_lat
-            profile.longitude = dep_lon
         
+        # プロフィールの値をRecruitmentに引き継ぐ（Recruitment側に保存する場合）
+        # もしRecruitment側にカラムがない場合はこの変数は省略可
+        no_smoking = profile.no_smoking if profile else True
+        pet_ok = profile.pet_ok if profile else False
+        food_ok = profile.food_ok if profile else True
+        music_ok = profile.music_ok if profile else True
+
         # 5. Recruitment(募集)の登録
-        # あなたのモデル定義に合わせて type=0(運転者) で登録
         new_rec = modelDB.Recruitment(
             recruiter_user_id=user_id,
-            status=0, # 0: 募集中
+            status=0,   # 0: 募集中
             fare=data.fee,
             capacity=data.capacity,
-            type=0,   # 0: 運転者からの募集
+            type=0,     # 0: 運転者からの募集
             route_id=new_route.route_id
+            # もしRecruitment側にルールカラムがあるなら以下を追加
+            # , no_smoking=no_smoking, pet_ok=pet_ok ...
         )
         db.add(new_rec)
         db.commit()
@@ -134,6 +127,5 @@ async def regist_drive(data: DriveCreateRequest, request: Request, db: Session =
 
     except Exception as e:
         db.rollback()
-        print(f"DEBUG ERROR: {e}")
+        print(f"ERROR: {e}")
         raise HTTPException(status_code=500, detail=f"DB登録失敗: {str(e)}")
-# % End
