@@ -191,7 +191,8 @@ async def get_my_recruitments(request: Request, db: Session = Depends(get_db)):
     ).join(
         modelDB.PassengerProfile, modelDB.User.user_id == modelDB.PassengerProfile.user_id
     ).filter(
-        modelDB.Recruitment.recruiter_user_id == user_id
+        modelDB.Recruitment.recruiter_user_id == user_id,
+        modelDB.Recruitment.type == 1  # ここに追加
     ).all()
 
     response_data = []
