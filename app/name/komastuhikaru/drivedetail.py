@@ -1,19 +1,23 @@
-from fastapi import APIRouter, Depends, HTTPException, Response, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Path
 from sqlalchemy.orm import Session
-from sqlalchemy.exc import IntegrityError
 from pydantic import BaseModel
-from typing import Optional, List
-from datetime import datetime, date, timedelta
+from typing import List, Optional
+from datetime import datetime
 import sys
+import time
+from geopy.geocoders import Nominatim
+
+# パス設定
 sys.path.append('..')
 from db_setting import SessionLocal
 import modelDB
 from app.name.hieda.user import get_current_user
 
-# ルーター定義 (prefixは機能に合わせて設定)
-router = APIRouter(prefix="/api/drives", tags=["drives"])
+router = APIRouter(prefix="/api/driver", tags=["driver"])
 
-# DBセッション
+# ---------------------------------------------------------
+# Helper Functions
+# ---------------------------------------------------------
 def get_db():
     db = SessionLocal()
     try:
@@ -21,20 +25,35 @@ def get_db():
     finally:
         db.close()
 
-# ------------------------------
-# レスポンスモデル定義
-# ------------------------------
+def get_location_name(lat, lon) -> str:
+    if lat is None or lon is None: return "場所情報なし"
+    try:
+        geolocator = Nominatim(user_agent="drive_app_detail_v1", timeout=3)
+        location = geolocator.reverse((float(lat), float(lon)), language='ja')
+        if location:
+            addr = location.raw.get('address', {})
+            city = addr.get('city', addr.get('town', addr.get('village', '')))
+            road = addr.get('road', '')
+            state = addr.get('province', addr.get('state', ''))
+            if city and road: return f"{city} {road}"
+            return state + city
+    except Exception:
+        pass
+    return f"地点({lat}, {lon})"
 
-class VehicleRules(BaseModel):
-    noSmoking: bool = False
-    petAllowed: bool = False
-    musicAllowed: bool = False
-    foodAllowed: bool = False
-
-class Passenger(BaseModel):
+# ---------------------------------------------------------
+# Pydantic Models (Response)
+# ---------------------------------------------------------
+class PassengerInfo(BaseModel):
     id: int
     name: str
     status: str
+
+class VehicleRules(BaseModel):
+    noSmoking: bool
+    petAllowed: bool
+    musicAllowed: bool
+    foodAllowed: bool
 
 class DriveDetailResponse(BaseModel):
     id: int
@@ -42,108 +61,115 @@ class DriveDetailResponse(BaseModel):
     driverName: str
     departure: str
     destination: str
-    departureTime: datetime
+    departureTime: str
     capacity: int
     currentPassengers: int
     fee: int
     message: Optional[str] = None
     vehicleRules: VehicleRules
     status: str
-    passengers: List[Passenger]
+    passengers: List[PassengerInfo]
 
 class DriveDetailWrapper(BaseModel):
     drive: DriveDetailResponse
 
-# ------------------------------
-# APIエンドポイント実装
-# ------------------------------
-
-# パターン3: セッション認証 + DB取得
-@router.get("/{drive_id}", response_model=DriveDetailWrapper)
+# ---------------------------------------------------------
+# API Endpoint
+# ---------------------------------------------------------
+@router.get("/drives/{drive_id}", response_model=DriveDetailWrapper)
 async def get_drive_detail(
-    drive_id: int,
-    request: Request, 
+    request: Request,
+    drive_id: int = Path(..., title="Drive ID"),
     db: Session = Depends(get_db)
 ):
     """
-    ドライブ詳細取得API
-    
-    処理:
-    1. セッションIDの検証
-    2. DBから指定されたdrive_idの情報を取得
-    3. 関連テーブル（Route, DriverProfile, Application）を結合してデータを整形
+    ドライブ詳細取得
     """
-    
-    # 1. クッキーからセッションIDを取得
+    # 1. 認証
     session_id = request.cookies.get("session_id")
+    if not session_id: raise HTTPException(status_code=401, detail="Unauthorized")
+    user_id_str = get_current_user(session_id=session_id, db=db)
+    if user_id_str == "no": raise HTTPException(status_code=401, detail="Invalid session")
+    user_id = int(user_id_str)
 
-    if not session_id:
-        raise HTTPException(status_code=401, detail="Unauthorized")
+    # 2. ドライブ情報の取得 (自分の募集か確認)
+    drive = db.query(modelDB.Recruitment, modelDB.Route).join(
+        modelDB.Route, modelDB.Recruitment.route_id == modelDB.Route.route_id
+    ).filter(
+        modelDB.Recruitment.recruitment_id == drive_id,
+        modelDB.Recruitment.recruiter_user_id == user_id
+    ).first()
 
-    # 2. セッションIDが有効か確認
-    res = get_current_user(session_id=session_id, db=db)
-    
-    if res == "no":
-        raise HTTPException(status_code=401, detail="Session expired or invalid")
-    
-    # ユーザーID取得 (strで返ってくるためintに変換)
-    user_id = int(res)
-
-    # 3. データベースからドライブ情報を取得
-    # Recruitment, Route, User(運転者), DriverProfile を結合
-    drive_data = db.query(modelDB.Recruitment, modelDB.Route, modelDB.DriverProfile, modelDB.User).\
-        join(modelDB.Route, modelDB.Recruitment.route_id == modelDB.Route.route_id).\
-        join(modelDB.User, modelDB.Recruitment.recruiter_user_id == modelDB.User.user_id).\
-        join(modelDB.DriverProfile, modelDB.User.user_id == modelDB.DriverProfile.user_id).\
-        filter(modelDB.Recruitment.recruitment_id == drive_id).first()
-
-    if not drive_data:
+    if not drive:
         raise HTTPException(status_code=404, detail="Drive not found")
 
-    recruitment, route, driver_profile, driver_user = drive_data
+    recruitment, route = drive
 
-    # 4. 同乗者リストと現在の乗車人数を取得
-    applications = db.query(modelDB.Application, modelDB.User).\
-        join(modelDB.User, modelDB.Application.applicant_user_id == modelDB.User.user_id).\
-        filter(modelDB.Application.recruitment_id == drive_id).all()
+    # 3. ドライバープロフィールの取得 (車両ルール)
+    driver_profile = db.query(modelDB.DriverProfile).filter(
+        modelDB.DriverProfile.user_id == user_id
+    ).first()
 
-    passenger_list = []
-    current_passenger_count = 0
+    # 4. ユーザー情報の取得 (名前)
+    driver_user = db.query(modelDB.User).filter(
+        modelDB.User.user_id == user_id
+    ).first()
 
-    for app, passenger_user in applications:
-        # ステータス判定 (DBの値 -> フロントエンド用文字列)
-        status_str = "pending"
-        if app.status == 1: # 承認済み
-            status_str = "approved"
-            current_passenger_count += 1
-        elif app.status == 2: # 拒否
-            status_str = "rejected"
-        
-        passenger_list.append(Passenger(
-            id=app.application_id,
-            name=passenger_user.name,
-            status=status_str
+    # 5. 申請者リストの取得
+    applications = db.query(modelDB.Application, modelDB.User).join(
+        modelDB.User, modelDB.Application.applicant_user_id == modelDB.User.user_id
+    ).filter(
+        modelDB.Application.recruitment_id == drive_id
+    ).all()
+
+    # 6. データ整形
+    # 申請者リスト作成 & 現在の乗車人数カウント(承認済みのみ)
+    passengers_list = []
+    approved_count = 0
+    
+    for app, user in applications:
+        # ステータス変換 (0:pending, 1:approved, 2:rejected)
+        st_str = 'pending'
+        if app.status == 1: 
+            st_str = 'approved'
+            approved_count += 1
+        elif app.status == 2: 
+            st_str = 'rejected'
+
+        passengers_list.append(PassengerInfo(
+            id=user.user_id,
+            name=user.name,
+            status=st_str
         ))
 
-    # ドライブ自体のステータス変換
-    drive_status = "recruiting"
-    if recruitment.status == 0: drive_status = "active"
-    elif recruitment.status == 1: drive_status = "scheduled" # 確定済み等
-    elif recruitment.status == 2: drive_status = "completed"
-    elif recruitment.status == 3: drive_status = "cancelled"
+    # ドライブステータス変換
+    status_map = {0: 'recruiting', 1: 'matched', 2: 'completed', 3: 'cancelled'}
+    drive_status = status_map.get(recruitment.status, 'unknown')
 
-    # TODO: 地名データの取得 (現在はDBにカラムがないため仮置き)
-    # 本来はRouteテーブルにdeparture_name等のカラムを追加するか、座標から逆ジオコーディングが必要
-    departure_name = "出発地(座標)" 
-    destination_name = "目的地(座標)"
+    # 住所変換 (API制限回避のため待機)
+    time.sleep(1.0)
+    dep_name = get_location_name(route.dep_latitude, route.dep_longitude)
+    des_name = get_location_name(route.arr_latitude, route.arr_longitude)
 
-    # 5. レスポンスデータの構築
+    # レスポンス構築
     response_data = DriveDetailResponse(
         id=recruitment.recruitment_id,
-        driverId=driver_user.user_id,
-        driverName=driver_user.name,
-        departure=departure_name,
-        destination=destination_name,
-        departureTime=route.dep_time,
+        driverId=user_id,
+        driverName=driver_user.name if driver_user else "Unknown",
+        departure=dep_name,
+        destination=des_name,
+        departureTime=route.dep_time.strftime('%Y-%m-%dT%H:%M:%S'),
         capacity=recruitment.capacity,
-        currentPassengers=
+        currentPassengers=approved_count,
+        fee=recruitment.fare,
+        vehicleRules=VehicleRules(
+            noSmoking=driver_profile.no_smoking if driver_profile else True,
+            petAllowed=driver_profile.pet_ok if driver_profile else False,
+            musicAllowed=driver_profile.music_ok if driver_profile else True,
+            foodAllowed=driver_profile.food_ok if driver_profile else False,
+        ),
+        status=drive_status,
+        passengers=passengers_list
+    )
+
+    return DriveDetailWrapper(drive=response_data)

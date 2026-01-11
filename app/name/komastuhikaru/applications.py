@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Request, Path
+from fastapi import APIRouter, Depends, HTTPException, Response, Request, Path
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 import sys
@@ -7,8 +7,9 @@ import sys
 sys.path.append('..')
 from db_setting import SessionLocal
 import modelDB
-from app.name.hieda.user import get_current_user 
+from app.name.hieda.user import get_current_user
 
+# ルーター定義
 router = APIRouter(prefix="/api/applications", tags=["applications"])
 
 # ---------------------------------------------------------
@@ -27,38 +28,29 @@ def get_db():
     finally:
         db.close()
 
-# DBステータス定数
-STATUS_PENDING = 0
-STATUS_APPROVED = 1
-STATUS_REJECTED = 2
-
 # ---------------------------------------------------------
-# API Endpoints
-# ---------------------------------------------------------
-
 # 承認 API
+# ---------------------------------------------------------
 @router.post("/{id}/approve", response_model=ActionResponse)
-async def approve_application(
-    request: Request,
-    id: int = Path(..., title="Application ID"), # Reactに合わせてintで受け取る
-    db: Session = Depends(get_db)
-):
+async def approve_application(request: Request, id: int = Path(..., title="Application ID"), db: Session = Depends(get_db)):
     """
-    申請承認 (POST /api/applications/:id/approve)
+    申請承認
     """
-    # 認証
+    # クッキーからセッションIDを取得
     session_id = request.cookies.get("session_id")
+
     if not session_id:
         raise HTTPException(status_code=401, detail="Unauthorized")
-    
-    user_id_str = get_current_user(session_id=session_id, db=db)
-    if user_id_str == "no":
+
+    res = get_current_user(session_id=session_id, db=db)
+
+    # セッションIDが有効かどうかを確認
+    if res == "no":
         raise HTTPException(status_code=401, detail="Invalid session")
     
-    current_driver_id = int(user_id_str)
+    current_driver_id = int(res)
 
-    # 対象の申請を検索 & 権限チェック
-    # (Recruitmentと結合して、募集主(recruiter_user_id)が自分であるか確認する)
+    # 対象の申請を検索 (自分が募集主であるか確認)
     application = db.query(modelDB.Application).join(
         modelDB.Recruitment,
         modelDB.Application.recruitment_id == modelDB.Recruitment.recruitment_id
@@ -70,35 +62,34 @@ async def approve_application(
     if not application:
         raise HTTPException(status_code=404, detail="Application not found or unauthorized")
 
-    # ステータス更新
-    application.status = STATUS_APPROVED
+    application.status = 1  # 承認
     db.commit()
-
+    
     return ActionResponse(message="承認しました")
 
-
+# ---------------------------------------------------------
 # 拒否 API
+# ---------------------------------------------------------
 @router.post("/{id}/reject", response_model=ActionResponse)
-async def reject_application(
-    request: Request,
-    id: int = Path(..., title="Application ID"), # Reactに合わせてintで受け取る
-    db: Session = Depends(get_db)
-):
+async def reject_application(request: Request, id: int = Path(..., title="Application ID"), db: Session = Depends(get_db)):
     """
-    申請拒否 (POST /api/applications/:id/reject)
+    申請拒否
     """
-    # 認証
+    # クッキーからセッションIDを取得
     session_id = request.cookies.get("session_id")
+
     if not session_id:
         raise HTTPException(status_code=401, detail="Unauthorized")
-    
-    user_id_str = get_current_user(session_id=session_id, db=db)
-    if user_id_str == "no":
+
+    res = get_current_user(session_id=session_id, db=db)
+
+    # セッションIDが有効かどうかを確認
+    if res == "no":
         raise HTTPException(status_code=401, detail="Invalid session")
     
-    current_driver_id = int(user_id_str)
+    current_driver_id = int(res)
 
-    # 対象の申請を検索 & 権限チェック
+    # 対象の申請を検索
     application = db.query(modelDB.Application).join(
         modelDB.Recruitment,
         modelDB.Application.recruitment_id == modelDB.Recruitment.recruitment_id
@@ -110,8 +101,7 @@ async def reject_application(
     if not application:
         raise HTTPException(status_code=404, detail="Application not found or unauthorized")
 
-    # ステータス更新
-    application.status = STATUS_REJECTED
+    application.status = 2  # 拒否
     db.commit()
-
+    
     return ActionResponse(message="拒否しました")
