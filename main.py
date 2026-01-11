@@ -92,13 +92,16 @@ app.include_router(orderhis.router)
 #ユーザー関連エンドポイントインポート ひかるstart 92行
 from app.name.komastuhikaru import drives # このパスは実際のファイル構成に合わせてください
 app.include_router(drives.router)
-
-
- 
-
-
-
-
+from app.name.komastuhikaru import driver_requests
+app.include_router(driver_requests.router)
+from app.name.komastuhikaru import applications
+app.include_router(applications.router)
+from app.name.komastuhikaru import drivedetail # ファイル名に合わせて
+app.include_router(drivedetail.router)
+from app.name.komastuhikaru import driver_nearby 
+app.include_router(driver_nearby.router)
+from app.name.komastuhikaru import request_detail
+app.include_router(request_detail.router)
 
 
 
