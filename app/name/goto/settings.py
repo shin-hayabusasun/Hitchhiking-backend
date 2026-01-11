@@ -1,47 +1,25 @@
-#コピペ
-from fastapi import APIRouter, Depends, HTTPException,Response,Request
+#コピペ  
+from fastapi import APIRouter, Depends, HTTPException, Response, Request, UploadFile, File
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 from pydantic import BaseModel, EmailStr
 from typing import Optional, List
-from datetime import datetime, date,timedelta
+from datetime import datetime, date, timedelta
 import sys
 sys.path.append('..')
 from db_setting import SessionLocal
 import modelDB
 import hashlib
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy.orm import Session
-# パスワード検証用のライブラリ (bcrypt)
+# パスワード検証用のライブラリ
 from passlib.context import CryptContext
 import secrets
-from app.name.hieda import get_current_user#ヒエダのuser apiにあるget_current_user関数をimportする（パスがあってるかわからないので調べて）
-####
+from app.name.hieda.user import get_current_user
+# パスワードハッシュ化設定
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-#####一部変える
-router = APIRouter(prefix="/api/", tags=["settings"]) #これは自分たちのパスを入れる(これ以降、ルートノードからの記述をする)
-######
+router = APIRouter(prefix="/api", tags=["settings"]) 
 
-# ###コピペ不要　お手本
-# """
-# APIの中をきれいにするために、使いまわせる関数を定義しておく場合
-# """
-# def create_session(db: Session, user_id: int):#呼び出すときはcreate_session(db=DB変数, user_id=userid変数)
-#     session_id = secrets.token_urlsafe(32)  # 推測不能
-#     expires_at = datetime.utcnow() + timedelta(days=1)
-
-#     session = modelDB.Session(
-#         session_id=session_id,
-#         user_id=user_id,
-#         expires_at=expires_at
-#     )
-#     db.add(session)
-#     db.commit()
-
-#     return session_id
-# ###
-
-######コピペ
 # DBセッション
 def get_db():
     db = SessionLocal()
@@ -50,37 +28,33 @@ def get_db():
     finally:
         db.close()
 
-#######
-
-# 一部変える（レスポンスやリクエストの型を定義する）
 # ==========================================
 # 1. 型定義 (Pydantic Models)
-#    設計書の Request / Response に合わせて定義
-#    ※ コピペ元の UserLogin などは全て消して、これを貼ってください
 # ==========================================
 
-# --- 5.13.1 ユーザー情報取得 (GET /api/users/me) ---
+# --- ユーザー情報取得 ---
 class UserInfoResponse(BaseModel):
     name: str
     email: str
-    isVerified: bool
+    # isVerified: bool 機能削除
 
-# --- 5.13.2 プロフィール更新 (PUT /api/users/me/profile) ---
+# --- プロフィール更新 ---
 class ProfileUpdateRequest(BaseModel):
     lastName: str
     firstName: str
     birthDate: str
     email: str
-    phone: str
     address: str
-    password: Optional[str] = None  # パスワード変更の際は入力される
+    password: Optional[str] = None 
 
 class SuccessResponse(BaseModel):
     success: bool
 
-# --- 5.13.3 本人確認書類 (POST) はファイルアップロードなのでBaseModel定義は不要 ---
+# 本人確認書類のリクエスト用（Base64文字列で受け取る）
+class IdentityDocumentRequest(BaseModel):
+    identification: str  # Hiedaさんの UserRegist と名前を合わせています
 
-# --- 5.13.4 通知設定更新 (PUT /api/settings/notifications) ---
+# --- 通知設定更新 ---
 class NotificationUpdateRequest(BaseModel):
     rideRequest: bool
     message: bool
@@ -90,11 +64,10 @@ class NotificationUpdateRequest(BaseModel):
 class MessageResponse(BaseModel):
     message: str
 
-# --- 5.13.5 クレジットカード追加 (POST /api/payment/cards) ---
+# --- クレジットカード関連 ---
 class CardAddRequest(BaseModel):
-    # 設計書にある項目
-    payment_token: str       # 決済トークン
-    id: Optional[str] = None # 新規時は不要かもしれないが念のため
+    payment_token: str
+    id: Optional[str] = None
     cardnumber: str
     name: str
     date: str
@@ -103,225 +76,171 @@ class CardAddRequest(BaseModel):
 class CardAddResponse(BaseModel):
     cardId: str
 
-# --- 5.13.6 クレジットカード編集 (PUT /api/payment/cards/{id}) ---
 class CardUpdateRequest(BaseModel):
-    # IDはパスパラメータで来るのでここには含めなくてもOKだが、設計書に合わせて定義
     cardnumber: str
     name: str
     date: str
     code: int
 
-# --- 5.14 決済 (POST /api/payment/transactions) ---
+# --- 決済関連 ---
 class PaymentRequest(BaseModel):
-    amount: int  # 決済金額
+    amount: int
 
 class PaymentResponse(BaseModel):
     transactionId: str
     status: str
     paidAt: str
 
-######
 
-###すべて変える（APIの処理を記述する）
+# ==========================================
+# 2. API実装
+# ==========================================
 
-
-#パターン3　セッションを使用してログインしているユーザーを特定して、何かする場合
-@router.get("/mypage",response_model=mypageResponse)
-async def is_login(user:UserMypage"""リクエストのデータ構造定義""",request: Request, db: Session = Depends(get_db)):#リクエストbodyがないときは記述しなくてよい,reqestはリクエストのセッション情報を見るために使う
-    
-    # クッキーからセッションIDを取得
+# 機能1: ユーザ情報取得
+@router.get("/users/me", response_model=UserInfoResponse)
+async def get_user_info(request: Request, db: Session = Depends(get_db)):
     session_id = request.cookies.get("session_id")
-
     if not session_id:
-        return RegistResponse(ok=False)
+        raise HTTPException(status_code=401, detail="No session")
 
-    res=get_current_user(session_id=session_id,db= db)#sessionが有効か見る。有効の場合はuseridがstrで返る
+    res = get_current_user(session_id=session_id, db=db)
+    if res == "no":
+        raise HTTPException(status_code=401, detail="Invalid session")
 
-    # セッションIDが有効かどうかをデータベースで確認
-    if res=="no":
-        return mypageResponse(エラー処理)
-    """
-    resにはセッションのuseridが入ってるのでそれを使って、ＤＢでマイページ情報を取得して、mypageobjectに入れる
-    """
+    user_id = int(res)
+    target_user = db.query(modelDB.User).filter(modelDB.User.user_id == user_id).first()
 
-    return mypageResponse(mypagedata=mypageobject)
-####
-#機能1:ユーザ情報取得
-@router.get("/users/me",response_model=UserInfoResponse)
-async def get_user_info(request: Request. db: Session = Depends(get_db)):
-    #クッキーからセッションIDを習得
-    session_id = request.cookies.get("session_id")
+    if not target_user:
+        raise HTTPException(status_code=404, detail="User not found")
 
-    if not session_id:
-        return RegistResponse(ok=False)
+    return UserInfoResponse(
+        name=target_user.name,
+        email=target_user.email, # DBのカラム名が mail であると想定
+        
+    )
 
-        res=get_current_user(session_id=session_id, db=db)
-
-if res=="no":
-    return mypageResponse(エラー処理)
-
-#IDを使用してデータベースから情報を検索
-target_user = db.query(modelDB.User).filter(modelDB.User.id == user_id).first()
-
-if not target_user:
-        raise HTTPException(status_code=404, detail="ユーザーが見つかりません")
-
-#取得したデータを、設計書通りの形にして返す
-return UserInfoResponse(
-        name=target_user.name,         # DBのカラム名に合わせてください
-        email=target_user.mail,        # DBのカラム名（mailかemailか確認）
-        isVerified=True # 本来は target_user.is_verified などDBの値を入れる
-)
-
-#機能2:プロフィール更新
+# 機能2: プロフィール更新
 @router.put("/users/me/profile", response_model=SuccessResponse)
 async def update_profile(
     profile_data: ProfileUpdateRequest, 
     request: Request, 
     db: Session = Depends(get_db)
 ):
-
-#クッキーからセッションIDを習得
     session_id = request.cookies.get("session_id")
-
     if not session_id:
-        return RegistResponse(ok=False)
+        raise HTTPException(status_code=401, detail="No session")
 
-        res=get_current_user(session_id=session_id, db=db)
+    res = get_current_user(session_id=session_id, db=db)
+    if res == "no":
+        raise HTTPException(status_code=401, detail="Invalid session")
 
-if res=="no":
-    return mypageResponse(エラー処理)
+    user_id = int(res)
+    target_user = db.query(modelDB.User).filter(modelDB.User.user_id == user_id).first()
 
-    #IDを使用してデータベースから情報を検索
-target_user = db.query(modelDB.User).filter(modelDB.User.id == user_id).first()
+    if not target_user:
+        raise HTTPException(status_code=404, detail="User not found")
 
-if not target_user:
-        raise HTTPException(status_code=404, detail="ユーザーが見つかりません")
-
-# 3. データの更新処理
-    
-    # (A) 名前: 姓と名を結合して保存 (例: "山田 太郎")
+    # データの更新処理
     target_user.name = f"{profile_data.lastName} {profile_data.firstName}"
-    
-    # (B) メールアドレス
-    target_user.email = profile_data.email
-    
-    # (C) 住所
+    # 【重要修正】以前のコードでは target_user.email でしたが、
+    # DBのカラム名は恐らく mail なので修正しています。もしエラーが出る場合はここを確認。
+    target_user.email = profile_data.email 
     target_user.address = profile_data.address
     
-    # (D) 生年月日: 文字列(YYYY-MM-DD) を Pythonの日付型に変換
+    # 生年月日
     try:
-        # フロントエンドから "1990-01-01" のような形式で来ると仮定
         date_obj = datetime.strptime(profile_data.birthDate, '%Y-%m-%d').date()
         target_user.birth_date = date_obj
     except ValueError:
         pass 
 
-    # (E) 電話番号
-    
-    # カラムを追加したら以下のコメントアウトを外してください。
-    # target_user.phone = profile_data.phone
-
-    # (F) パスワード変更
-    # 入力がある場合のみ更新する（空文字やNoneなら変更しない）
+    # パスワード変更
     if profile_data.password and len(profile_data.password) > 0:
-        # 生のパスワードではなく、ハッシュ化したものを保存する
         hashed_password = pwd_context.hash(profile_data.password)
         target_user.password = hashed_password
 
-    # 4. 変更をデータベースに反映 (コミット)
     try:
         db.commit()
     except Exception as e:
-        db.rollback() # エラーが起きたら元に戻す
-        raise HTTPException(status_code=500, detail="更新に失敗しました")
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Update failed")
 
     return SuccessResponse(success=True)
 
 
-# 5.13.3 本人確認書類アップロード
+# 5.13.3 本人確認書類アップロード（Hiedaさんの方式に合わせる）
 @router.post("/users/me/identity-document", response_model=SuccessResponse)
 async def upload_identity_document(
-    file: UploadFile = File(...),  # フロントから送られてくる画像ファイル
+    data: IdentityDocumentRequest,  # File ではなく文字データとして受け取る
     request: Request, 
     db: Session = Depends(get_db)
 ):
-
-#クッキーからセッションIDを習得
+    # セッション確認
     session_id = request.cookies.get("session_id")
-
     if not session_id:
-        return RegistResponse(ok=False)
+        raise HTTPException(status_code=401, detail="No session")
 
-        res=get_current_user(session_id=session_id, db=db)
+    res = get_current_user(session_id=session_id, db=db)
+    if res == "no":
+        raise HTTPException(status_code=401, detail="Invalid session")
 
-if res=="no":
-    return mypageResponse(エラー処理)
+    user_id = int(res)
+    target_user = db.query(modelDB.User).filter(modelDB.User.user_id == user_id).first()
 
-    #IDを使用してデータベースから情報を検索
-target_user = db.query(modelDB.User).filter(modelDB.User.id == user_id).first()
-
-if not target_user:
+    if not target_user:
         raise HTTPException(status_code=404, detail="ユーザーが見つかりません")
 
-try:
-        # アップロードされたファイルの中身をバイナリとして読み込む
-        file_content = await file.read()
+    try:
+        # Hiedaさんのコードと同じ処理：Base64のカンマ以降を取り出す
+        if "," in data.identification:
+            header, encoded = data.identification.split(",", 1)
+        else:
+            encoded = data.identification
         
-        # DBのBYTEAカラムにそのまま入れる
-        target_user.identity_doc = file_content
+        # 文字列をバイナリ（bytes）に変換してDBに保存
+        identity_doc_binary = encoded.encode('utf-8') 
+        target_user.identity_doc = identity_doc_binary
         
-        # ★補足: ここで「確認ステータス」を更新したい場合
-        # models.py に is_verified や status カラムがあればここで更新します
-        # target_user.is_verified = False  # 再申請なので「未確認」に戻すなど
-
         db.commit()
         
     except Exception as e:
         db.rollback()
-        print(f"Error uploading file: {e}")
-        raise HTTPException(status_code=500, detail="ファイルの保存に失敗しました")
+        print(f"Error saving document: {e}")
+        raise HTTPException(status_code=500, detail="保存に失敗しました")
 
     return SuccessResponse(success=True)
 
-#通知設定
+# 通知設定
 @router.put("/settings/notifications", response_model=MessageResponse)
 async def update_notifications(
     settings: NotificationUpdateRequest, 
     request: Request, 
     db: Session = Depends(get_db)
 ):
-
-#クッキーからセッションIDを習得
     session_id = request.cookies.get("session_id")
-
     if not session_id:
-        return RegistResponse(ok=False)
+        raise HTTPException(status_code=401, detail="No session")
 
-        res=get_current_user(session_id=session_id, db=db)
+    res = get_current_user(session_id=session_id, db=db)
+    if res == "no":
+        raise HTTPException(status_code=401, detail="Invalid session")
 
-if res=="no":
-    return mypageResponse(エラー処理)
+    user_id = int(res)
+    target_user = db.query(modelDB.User).filter(modelDB.User.user_id == user_id).first()
 
-#IDを使用してデータベースから情報を検索
-target_user = db.query(modelDB.User).filter(modelDB.User.id == user_id).first()
+    if not target_user:
+        raise HTTPException(status_code=404, detail="User not found")
 
-if not target_user:
-        raise HTTPException(status_code=404, detail="ユーザーが見つかりません")
-
-# 3. 設定の更新処理
-    # リクエスト(settings) の値を、DBのカラム(target_user) に書き写す
-    
+    # 設定の更新
     target_user.notify_ride_request = settings.rideRequest
     target_user.notify_message = settings.message
     target_user.notify_reminder = settings.reminder
     target_user.notify_promotion = settings.promotion
 
-# 4. データベースに保存
     try:
         db.commit()
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail="設定の保存に失敗しました")
+        raise HTTPException(status_code=500, detail="Save failed")
 
     return MessageResponse(message="通知設定を更新しました")
