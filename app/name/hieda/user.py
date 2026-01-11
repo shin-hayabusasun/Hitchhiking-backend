@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 # パスワード検証用のライブラリ (bcrypt)
 from passlib.context import CryptContext
 import secrets
+from ai_model import get_embedding
 
 
 router = APIRouter(prefix="/api/user", tags=["user"])
@@ -139,6 +140,20 @@ async def login(
     
     return LoginResponse(ok=True, isuser=user.isuser)
 
+import logging
+import hashlib
+from datetime import date
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
+
+# 自作モジュール
+import modelDB
+from db_setting import SessionLocal
+# ★ ai_model から関数をインポート (パスは環境に合わせて調整してください)
+from ai_model import get_embedding 
+
+# --- (中略: Pydanticモデル定義など) ---
+
 @router.post("/regist", response_model=RegistResponse)
 async def regist(user: UserRegist, db: Session = Depends(get_db)):
     try:
@@ -166,12 +181,17 @@ async def regist(user: UserRegist, db: Session = Depends(get_db)):
             identity_doc_binary = encoded.encode('utf-8') 
         except Exception:
             raise HTTPException(status_code=400, detail="本人確認書類のデータが不正です")
-        
 
-        if user.mail =="admin@gmail.com":
-            setadmin_flag=1
-        else:
-            setadmin_flag=0
+        setadmin_flag = 1 if user.mail == "admin@gmail.com" else 0
+
+        # --- Embeddingの初期化処理 ---
+        # bioが空なので、初期ベクトル作成用のデフォルトテキストを使用
+        default_bio_text = "新規ユーザーです。よろしくお願いします。"
+        try:
+            initial_embedding = get_embedding(default_bio_text)
+        except Exception as e:
+            print(f"Embedding generation failed: {e}")
+            initial_embedding = None # 失敗した場合はNoneを許容
 
         # 6. Userテーブルへの挿入
         new_user = modelDB.User(
@@ -182,7 +202,7 @@ async def regist(user: UserRegist, db: Session = Depends(get_db)):
             birth_date=birth_date,
             address=full_address,
             identity_doc=identity_doc_binary,
-            admin_flag=setadmin_flag  # 通常ユーザーとして登録
+            admin_flag=setadmin_flag
         )
         
         db.add(new_user)
@@ -194,21 +214,20 @@ async def regist(user: UserRegist, db: Session = Depends(get_db)):
             ride_count=0,
             rating=0.0,
             reg_date=date.today(),
-            bio="",
+            bio="", # 初期は空
             latitude=None,
             longitude=None,
-            embedding=None
+            embedding=initial_embedding # ★ 生成したベクトルをセット
         )
         db.add(passenger_profile)
 
-        # ★★★ 追加: UserBalance (初期ポイント100pt) の登録 ★★★
+        # --- UserBalance の登録 ---
         user_balance = modelDB.UserBalance(
             user_id=new_user.user_id,
-            point_balance=100,  # 新規登録特典として100pt付与
-            sales_history=0    # 売上履歴は0で初期化
+            point_balance=100,
+            sales_history=0
         )
         db.add(user_balance)
-        # ★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★★
         
         # 7. 運転者としても登録する場合 (isdriver == 1)
         if user.isdriver == 1:
@@ -229,8 +248,8 @@ async def regist(user: UserRegist, db: Session = Depends(get_db)):
                 music_ok=True,
                 latitude=None,
                 longitude=None,
-                bio="",
-                embedding=None
+                bio="", # 初期は空
+                embedding=initial_embedding # ★ 生成したベクトルをセット
             )
             db.add(driver_profile)
         
