@@ -185,3 +185,21 @@ from app.name.nori import adminuser
 app.include_router(adminuser.router)
 from app.name.nori import deleteuser
 app.include_router(deleteuser.router)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+from app.name.goto import inquiry   # ★追加
+app.include_router(inquiry.router) # ★追加
