@@ -51,8 +51,8 @@ app.include_router(testproduct.router)
 
 #ユーザー関連エンドポイントインポート 田所start 52行
 
-from app.name.tadokoro import mydrive  # 1. 作成したファイルをインポート（パスは実際の場所に合わせる）
-app.include_router(mydrive.router)     # 2. ルーターをアプリに登録
+from app.name.tadokoro import driverdetail  # 1. 作成したファイルをインポート（パスは実際の場所に合わせる）
+app.include_router(driverdetail.router)     # 2. ルーターをアプリに登録
 from app.name.tadokoro import my_requests
 app.include_router(my_requests.router)
 from app.name.tadokoro import create_drive # ← ファイル名と一致しているか
@@ -96,12 +96,12 @@ from app.name.komastuhikaru import driver_requests
 app.include_router(driver_requests.router)
 from app.name.komastuhikaru import applications
 app.include_router(applications.router)
-
- 
-
-
-
-
+from app.name.komastuhikaru import drivedetail # ファイル名に合わせて
+app.include_router(drivedetail.router)
+from app.name.komastuhikaru import driver_nearby 
+app.include_router(driver_nearby.router)
+from app.name.komastuhikaru import request_detail
+app.include_router(request_detail.router)
 
 
 
