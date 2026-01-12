@@ -185,7 +185,7 @@ from app.name.nori import adminuser
 app.include_router(adminuser.router)
 from app.name.nori import deleteuser
 app.include_router(deleteuser.router)
-<<<<<<< HEAD
+
 from app.name.koroboshi import sukejuru
 app.include_router(sukejuru.router)
 from app.name.koroboshi import shinkou
@@ -194,23 +194,5 @@ from app.name.koroboshi import kanryou
 app.include_router(kanryou.router)
 from app.name.koroboshi import Delyotei
 app.include_router(Delyotei.router)
-=======
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 from app.name.goto import inquiry   # ★追加
 app.include_router(inquiry.router) # ★追加
->>>>>>> origin/main
