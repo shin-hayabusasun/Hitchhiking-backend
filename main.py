@@ -185,3 +185,11 @@ from app.name.nori import adminuser
 app.include_router(adminuser.router)
 from app.name.nori import deleteuser
 app.include_router(deleteuser.router)
+from app.name.koroboshi import sukejuru
+app.include_router(sukejuru.router)
+from app.name.koroboshi import shinkou
+app.include_router(shinkou.router)
+from app.name.koroboshi import kanryou
+app.include_router(kanryou.router)
+from app.name.koroboshi import Delyotei
+app.include_router(Delyotei.router)
