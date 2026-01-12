@@ -187,6 +187,17 @@ class notification(Base):
     is_read = Column(Boolean, nullable=False, default=False)
     created_at = Column(DateTime, nullable=False, default=datetime.now)
 
+class Review(Base):
+    __tablename__ = "reviews"
+
+    review_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    reviewer_user_id = Column(Integer, ForeignKey("users.user_id"), nullable=False)
+    reviewee_user_id = Column(Integer, ForeignKey("users.user_id"), nullable=False)
+    recruitment_id = Column(Integer, ForeignKey("recruitments.recruitment_id"), nullable=False)
+    rating = Column(Numeric(2, 1), nullable=False)  # 例: 4.5
+    comment = Column(String, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.now)
+
 
 
 
