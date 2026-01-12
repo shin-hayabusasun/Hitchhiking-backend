@@ -4,6 +4,11 @@ from pydantic import BaseModel
 from datetime import date
 from typing import Optional
 import sys
+import logging # 追加
+
+# --- ログの設定を追加 ---
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # パス設定（環境に合わせて調整してください）
 sys.path.append('..')
@@ -96,6 +101,8 @@ class UpdateBioResponse(BaseModel):
 
 # --- 自己紹介更新 API ---
 
+from ai_model import get_embedding # インポートを確認
+
 @router.post("/myupdate", response_model=UpdateBioResponse)
 async def update_bio(
     request: Request, 
@@ -103,13 +110,7 @@ async def update_bio(
     db: Session = Depends(get_db)
 ):
     """
-    自己紹介文更新API
-    
-    処理:
-    1. クッキーから session_id を取得
-    2. get_current_user で user_id を特定
-    3. PassengerProfile テーブルの該当レコードを検索
-    4. bio カラムを更新して保存
+    自己紹介文およびベクトル（embedding）更新API
     """
     
     # 1. クッキーからセッションIDを取得
@@ -117,30 +118,54 @@ async def update_bio(
     if not session_id:
         raise HTTPException(status_code=401, detail="認証が必要です")
 
-    # 2. ユーザーを特定 (res = userid の文字列)
+    # 2. ユーザーを特定
     res = get_current_user(session_id=session_id, db=db)
     if res == "no":
         raise HTTPException(status_code=401, detail="セッションが無効です")
 
     user_id = int(res)
 
-    # 3. DBから該当ユーザーの PassengerProfile を取得
-    profile = db.query(modelDB.PassengerProfile).filter(
-        modelDB.PassengerProfile.user_id == user_id
-    ).first()
-
-    if not profile:
-        raise HTTPException(status_code=404, detail="プロフィールが見つかりません")
-
-    # 4. データの更新
+    # --- 新しい Embedding の生成 ---
+    # bioが空文字の場合は、前回同様デフォルトテキストで埋めるか、
+    # あるいは空文字のベクトルを取得します（ここでは入力された bio を使用）
     try:
-        profile.bio = body.bio  # リクエストボディの bio を代入
-        db.commit()             # 確定
+        new_embedding = get_embedding(body.bio) if body.bio.strip() else get_embedding("未設定")
+    except Exception as e:
+        logger.error(f"Embedding update failed: {e}")
+        new_embedding = None
+
+    # 3. 各プロフィールの更新処理
+    try:
+        # ① PassengerProfile の更新
+        p_profile = db.query(modelDB.PassengerProfile).filter(
+            modelDB.PassengerProfile.user_id == user_id
+        ).first()
         
-        print(f"User {user_id} updated bio to: {body.bio}")
+        if p_profile:
+            p_profile.bio = body.bio
+            p_profile.embedding = new_embedding
+
+        # ② DriverProfile の更新 (存在する場合のみ)
+        d_profile = db.query(modelDB.DriverProfile).filter(
+            modelDB.DriverProfile.user_id == user_id
+        ).first()
+        
+        if d_profile:
+            d_profile.bio = body.bio
+            d_profile.embedding = new_embedding
+
+        # どちらのプロフィールも見つからない場合
+        if not p_profile and not d_profile:
+            raise HTTPException(status_code=404, detail="プロフィールが見つかりません")
+
+        db.commit() # 確定
+        
+        logger.info(f"User {user_id} updated bio and embedding.")
         return UpdateBioResponse(ok=True)
 
+    except HTTPException:
+        raise
     except Exception as e:
-        db.rollback()           # エラー時は巻き戻し
-        print(f"Update error: {e}")
+        db.rollback()
+        logger.error(f"Update error: {e}")
         raise HTTPException(status_code=500, detail="更新中にエラーが発生しました")

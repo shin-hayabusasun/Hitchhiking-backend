@@ -168,6 +168,16 @@ class Product(Base):
     points = Column(Integer, nullable=False, default=0)
     description = Column(String, nullable=True)
 
+# 追加　通知設定テーブル
+class NotificationSetting(Base):
+    __tablename__ = "notification_settings"
+
+    user_id = Column(Integer, ForeignKey("users.user_id"), primary_key=True)
+    ride_request = Column(Boolean, default=True)  # 相乗りリクエスト
+    message = Column(Boolean, default=True)       # メッセージ受信
+    reminder = Column(Boolean, default=True)      # リマインド
+    promotion = Column(Boolean, default=False)    # お得な情報
+    
 class notification(Base):
     __tablename__ = "notifications"
 
@@ -176,3 +186,66 @@ class notification(Base):
     message = Column(String, nullable=False)
     is_read = Column(Boolean, nullable=False, default=False)
     created_at = Column(DateTime, nullable=False, default=datetime.now)
+
+class Review(Base):
+    __tablename__ = "reviews"
+
+    review_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    reviewer_user_id = Column(Integer, ForeignKey("users.user_id"), nullable=False)
+    reviewee_user_id = Column(Integer, ForeignKey("users.user_id"), nullable=False)
+    recruitment_id = Column(Integer, ForeignKey("recruitments.recruitment_id"), nullable=False)
+    rating = Column(Numeric(2, 1), nullable=False)  # 例: 4.5
+    comment = Column(String, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.now)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# 追加　問い合わせテーブル
+class Inquiry(Base):
+    __tablename__ = "inquiries"
+
+    inquiry_id = Column(Integer, primary_key=True, index=True)
+    category = Column(String, nullable=False)
+    email = Column(String, nullable=False)
+    subject = Column(String, nullable=False)
+    body = Column(String, nullable=False)
+    # 対応状況（未対応: 0, 対応中: 1, 完了: 2 など）
+    status = Column(Integer, default=0) 
+    created_at = Column(DateTime, default=datetime.now)
