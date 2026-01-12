@@ -47,6 +47,14 @@ class ProfileUpdateRequest(BaseModel):
     address: str
     password: Optional[str] = None 
 
+    # フロントエンドに返すためのプロフィール情報の形
+class ProfileResponse(BaseModel):
+    lastName: str
+    firstName: str
+    email: str
+    address: str | None = None
+    birthDate: str | None = None
+
 class SuccessResponse(BaseModel):
     success: bool
 
@@ -83,13 +91,17 @@ class CardUpdateRequest(BaseModel):
     code: int
 
 # --- 決済関連 ---
+
 class PaymentRequest(BaseModel):
     amount: int
+
 
 class PaymentResponse(BaseModel):
     transactionId: str
     status: str
     paidAt: str
+    amount: int
+    message: str
 
 
 # ==========================================
@@ -120,6 +132,49 @@ async def get_user_info(request: Request, db: Session = Depends(get_db)):
     )
 
 # 機能2: プロフィール更新
+# 2.1既存情報取得
+# プロフィール情報の取得（画面表示用）
+@router.get("/users/me/profile", response_model=ProfileResponse)
+async def get_profile(request: Request, db: Session = Depends(get_db)):
+    session_id = request.cookies.get("session_id")
+    if not session_id:
+        raise HTTPException(status_code=401, detail="No session")
+
+    res = get_current_user(session_id=session_id, db=db)
+    if res == "no":
+        raise HTTPException(status_code=401, detail="Invalid session")
+
+    user_id = int(res)
+    target_user = db.query(modelDB.User).filter(modelDB.User.user_id == user_id).first()
+
+    if not target_user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    
+    full_name = target_user.name or ""
+    if " " in full_name:
+        last_name, first_name = full_name.split(" ", 1)
+    elif "　" in full_name: # 全角スペース対策
+        last_name, first_name = full_name.split("　", 1)
+    else:
+        # スペースがない場合は、とりあえず全部「姓」に入れておく
+        last_name = full_name
+        first_name = ""
+
+    # 3. 生年月日の変換 (Date型 -> 文字列)
+    birth_date_str = target_user.birth_date.strftime('%Y-%m-%d') if target_user.birth_date else ""
+
+
+    # 4. データを返す
+    return {
+        "lastName": last_name,
+        "firstName": first_name,
+        "email": target_user.email, 
+        "address": target_user.address,
+        "birthDate": birth_date_str,
+    }
+
+# 登録情報更新
 @router.put("/users/me/profile", response_model=SuccessResponse)
 async def update_profile(
     profile_data: ProfileUpdateRequest, 
@@ -142,8 +197,6 @@ async def update_profile(
 
     # データの更新処理
     target_user.name = f"{profile_data.lastName} {profile_data.firstName}"
-    # 【重要修正】以前のコードでは target_user.email でしたが、
-    # DBのカラム名は恐らく mail なので修正しています。もしエラーが出る場合はここを確認。
     target_user.email = profile_data.email 
     target_user.address = profile_data.address
     
@@ -277,3 +330,55 @@ async def update_notifications(settings: NotificationSettingsSchema, request: Re
     
     db.commit()
     return {"message": "success"}
+
+
+# 決済関連 (API実装: デモ用・DB保存あり)
+
+@router.post("/payment/transactions", response_model=PaymentResponse)
+async def process_payment(
+    payment_data: PaymentRequest,
+    request: Request,
+    db: Session = Depends(get_db)
+):
+    # 1. セッションチェック (ログインしているか確認)
+    session_id = request.cookies.get("session_id")
+    if not session_id:
+        raise HTTPException(status_code=401, detail="No session")
+
+    res = get_current_user(session_id=session_id, db=db)
+    if res == "no":
+        raise HTTPException(status_code=401, detail="Invalid session")
+    
+    user_id = int(res)
+
+    # 2. データベースに履歴を保存する
+    
+    
+    # transaction_id をランダムな数値で生成 (DB定義がIntegerのため)
+    dummy_tx_id = random.randint(10000000, 99999999)
+    
+    # Paymentモデルを作成
+    new_payment = modelDB.Payment(
+        user_id=user_id,
+        card_number=4242,  # デモ用ダミーカード番号 
+        transaction_id=dummy_tx_id,
+        status=1,          # 1 = 成功 (Success) と仮定して保存
+        billing_date=datetime.now()
+    )
+    
+    try:
+        db.add(new_payment)
+        db.commit()
+        db.refresh(new_payment)
+    except Exception as e:
+        db.rollback()
+        print(f"Payment DB Error: {e}")
+
+    # 3. フロントエンドへのレスポンス
+    return {
+        "transactionId": str(dummy_tx_id),
+        "status": "completed",
+        "paidAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), # DB保存日時または現在時刻
+        "amount": payment_data.amount,
+        "message": "決済が完了しました"
+    }
