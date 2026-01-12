@@ -1,13 +1,14 @@
 from fastapi import APIRouter, Depends, HTTPException, Request, Query
 from sqlalchemy.orm import Session
+# ★追加: DB側での型キャスト用
+from sqlalchemy import cast, Numeric 
 from pydantic import BaseModel
 from typing import List, Optional
 from datetime import datetime, timedelta
 import sys
 import math
-import time
-import numpy as np
-from geopy.geocoders import Nominatim
+# import numpy as np # numpyは不要になります
+# from geopy.geocoders import Nominatim # geopyも不要になります
 
 # パス設定
 sys.path.append('..')
@@ -15,7 +16,6 @@ from db_setting import SessionLocal
 import modelDB
 from app.name.hieda.user import get_current_user
 
-# ルーター定義
 router = APIRouter(prefix="/api/driver", tags=["driver"])
 
 # ---------------------------------------------------------
@@ -42,36 +42,6 @@ def calculate_distance(lat1, lon1, lat2, lon2):
     c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
     return R * c
 
-# 住所変換
-def get_location_name(lat, lon) -> str:
-    if lat is None or lon is None: return "場所情報なし"
-    try:
-        geolocator = Nominatim(user_agent="drive_app_nearby_v1", timeout=3)
-        location = geolocator.reverse((float(lat), float(lon)), language='ja')
-        if location:
-            addr = location.raw.get('address', {})
-            city = addr.get('city', addr.get('town', addr.get('village', '')))
-            road = addr.get('road', '')
-            if city and road: return f"{city} {road}"
-            return location.address.split(',')[0]
-    except Exception:
-        pass
-    return f"地点({lat:.4f}, {lon:.4f})"
-
-# ベクトルマッチング度計算
-def calculate_similarity(vec1: List[float], vec2: List[float]) -> int:
-    if vec1 is None or vec2 is None: return 0
-    try:
-        v1 = np.array(vec1)
-        v2 = np.array(vec2)
-        norm1 = np.linalg.norm(v1)
-        norm2 = np.linalg.norm(v2)
-        if norm1 == 0 or norm2 == 0: return 0
-        cos_sim = np.dot(v1, v2) / (norm1 * norm2)
-        return int(max(0, cos_sim) * 100)
-    except Exception:
-        return 0
-
 # ---------------------------------------------------------
 # Pydantic Models
 # ---------------------------------------------------------
@@ -87,7 +57,7 @@ class NearbyRecruitmentItem(BaseModel):
     matchingScore: int
     rating: float
     reviewCount: int
-    startsIn: int # 何分後に出発か
+    startsIn: int
 
 class NearbyListResponse(BaseModel):
     requests: List[NearbyRecruitmentItem]
@@ -125,18 +95,33 @@ async def get_nearby_recruitments(
     driver_embedding = driver_profile.embedding if driver_profile else None
 
     # 3. 日時フィルタの準備
-    now = datetime.now()
-    limit_time = now + timedelta(hours=2) # 2時間後
+    now = datetime.utcnow() + timedelta(hours=9)
+    limit_time = now + timedelta(hours=2) # テスト用に24時間
 
-    # 4. DBクエリ (同乗者募集, 募集中, 2時間以内)
-    # type=1: 同乗者からの募集 (想定)
-    # status=0: 募集中 (想定)
-    query = db.query(
-        modelDB.Recruitment,
-        modelDB.Route,
-        modelDB.User,
-        modelDB.PassengerProfile
-    ).join(
+    # 4. DBクエリ構築 (ベクトル距離計算を含む)
+    # ドライバー(自分)と、募集者のパッセンジャープロフィールの距離を計算
+    if driver_embedding is not None:
+        # pgvectorのcosine_distanceを利用
+        dist_col = modelDB.PassengerProfile.embedding.cosine_distance(driver_embedding).label("v_dist")
+        query = db.query(
+            modelDB.Recruitment,
+            modelDB.Route,
+            modelDB.User,
+            modelDB.PassengerProfile,
+            dist_col
+        )
+    else:
+        # ベクトルがない場合は距離0(or Null)として扱う
+        query = db.query(
+            modelDB.Recruitment,
+            modelDB.Route,
+            modelDB.User,
+            modelDB.PassengerProfile,
+            cast(None, Numeric).label("v_dist")
+        )
+
+    # 結合条件
+    query = query.join(
         modelDB.Route, modelDB.Recruitment.route_id == modelDB.Route.route_id
     ).join(
         modelDB.User, modelDB.Recruitment.recruiter_user_id == modelDB.User.user_id
@@ -146,7 +131,7 @@ async def get_nearby_recruitments(
         modelDB.Recruitment.type == 1,      # 同乗者募集
         modelDB.Recruitment.status == 0,    # 募集中
         modelDB.Route.dep_time >= now,      # 過去ではない
-        modelDB.Route.dep_time <= limit_time # 2時間以内
+        modelDB.Route.dep_time <= limit_time 
     )
 
     candidates = query.all()
@@ -154,21 +139,26 @@ async def get_nearby_recruitments(
     # 5. 距離フィルタ & データ整形
     response_list = []
 
-    for recruit, route, user, profile in candidates:
-        # 距離計算
+    for recruit, route, user, profile, v_dist in candidates:
+        # 物理的な距離計算 (km)
         dist = calculate_distance(lat, lng, route.dep_latitude, route.dep_longitude)
         
-        # 指定半径以内 (デフォルト10km) かつ、まだリストに追加していない場合
+        # 指定半径以内
         if dist <= radius:
             try:
-                # マッチング度
-                passenger_embedding = profile.embedding if profile else None
-                score = calculate_similarity(driver_embedding, passenger_embedding)
+                # ★修正: マッチングスコア計算 (boshukensakuと同じロジック)
+                # v_dist はコサイン距離 (0~2)。 0に近いほど似ている。
+                current_dist = float(v_dist) if v_dist is not None else None
+                
+                if current_dist is not None:
+                    # 距離をスコア(0-100)に変換
+                    score = int(max(0, min(100, (1 - current_dist) * 100)))
+                else:
+                    score = 50 # ベクトルがない場合のデフォルト
 
-                # 地名変換 (APIレート制限対策)
-                time.sleep(1.0) 
-                dep_name = get_location_name(route.dep_latitude, route.dep_longitude)
-                des_name = get_location_name(route.arr_latitude, route.arr_longitude)
+                # ★修正: DBから地名を直接取得
+                dep_name = route.depname if route.depname else "出発地不明"
+                des_name = route.arrname if route.arrname else "目的地不明"
 
                 # 出発までの時間 (分)
                 delta = route.dep_time - now
