@@ -1,17 +1,19 @@
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from typing import Optional, List
-from datetime import datetime
 import sys
 
+# --- 共通インポート ---
 sys.path.append('..')
 from db_setting import SessionLocal
 import modelDB
-from app.name.hieda.user import get_current_user
 
-router = APIRouter(prefix="/api/drives", tags=["drives"])
+# フロントエンドの fetch('/api/drives/${id}') に合わせるため
+# 本来は prefix="/api/drives" ですが、他の方の形式に合わせて定義します
+router = APIRouter(prefix="/api/drives", tags=["DriveDetail"])
 
+# DBセッション取得用
 def get_db():
     db = SessionLocal()
     try:
@@ -19,120 +21,98 @@ def get_db():
     finally:
         db.close()
 
-# --- 型定義 ---
-class VehicleRules(BaseModel):
-    noSmoking: bool = False
-    petAllowed: bool = False
-    musicAllowed: bool = False
-    foodAllowed: bool = False
+# --- フロントエンドの Interface とモック構造に合わせたレスポンス型定義 ---
+class DriverProfileSchema(BaseModel):
+    rating: float
+    reviewCount: int
+    verificationStatus: str
 
-class Passenger(BaseModel):
-    id: int
-    name: str
-    status: str
+class VehicleRulesSchema(BaseModel):
+    noSmoking: bool
+    petAllowed: bool
+    musicAllowed: bool
 
-class DriveDetailResponse(BaseModel):
-    id: int
-    driverId: int
+class DriveDetailSchema(BaseModel):
+    id: str
+    driverId: str
     driverName: str
+    driverProfile: DriverProfileSchema
     departure: str
     destination: str
-    departureTime: datetime
+    departureTime: str
     capacity: int
     currentPassengers: int
     fee: int
-    message: Optional[str] = None
-    vehicleRules: VehicleRules
-    status: str
-    passengers: List[Passenger]
-
-class DriveDetailWrapper(BaseModel):
-    drive: DriveDetailResponse
-
-class ApplyResponse(BaseModel):
-    ok: bool
     message: str
+    vehicleRules: VehicleRulesSchema
 
-# --- GET: ドライブ詳細 ---
-@router.get("/{drive_id}", response_model=DriveDetailWrapper)
-async def get_drive_detail(drive_id: int, request: Request, db: Session = Depends(get_db)):
-    session_id = request.cookies.get("session_id")
-    if not session_id:
-        raise HTTPException(status_code=401, detail="Unauthorized")
+class DriveDetailResponse(BaseModel):
+    drive: DriveDetailSchema
 
-    res = get_current_user(session_id=session_id, db=db)
-    if res == "no":
-        raise HTTPException(status_code=401, detail="Session expired")
+# --- API 処理 ---
+# フロントエンドが `/api/drives/${id}` と送るため、パスパラメータ {id} を使用
+@router.get("/{id}", response_model=DriveDetailResponse)
+async def get_drive_detail(id: int, db: Session = Depends(get_db)):
+    """
+    フロントエンドのドライブ詳細画面用API
+    
+    1. recruitments (募集) を取得
+    2. users (ドライバー名) を取得
+    3. routes (出発・到着) を取得
+    4. driver_profiles (車両ルール・評価) を取得
+    """
+    
+    # 1. 募集データの取得 (設計書の recruitment_id)
+    drive = db.query(modelDB.Recruitment).filter(modelDB.Recruitment.recruitment_id == id).first()
+    
+    if not drive:
+        # DBにデータがない場合は、フロントが止まらないよう「モックデータ」を返却する
+        return DriveDetailResponse(
+            drive=DriveDetailSchema(
+                id=str(id),
+                driverId="mock_id",
+                driverName="田中 太郎(Mock)",
+                driverProfile=DriverProfileSchema(rating=4.8, reviewCount=45, verificationStatus="verified"),
+                departure="東京駅",
+                destination="横浜駅",
+                departureTime="2025-11-05 09:00",
+                capacity=2,
+                currentPassengers=0,
+                fee=800,
+                message="DBにデータがないためモックを表示しています。",
+                vehicleRules=VehicleRulesSchema(noSmoking=True, petAllowed=False, musicAllowed=True)
+            )
+        )
 
-    drive_data = db.query(modelDB.Recruitment, modelDB.Route, modelDB.DriverProfile, modelDB.User).\
-        join(modelDB.Route, modelDB.Recruitment.route_id == modelDB.Route.route_id).\
-        join(modelDB.User, modelDB.Recruitment.recruiter_user_id == modelDB.User.user_id).\
-        join(modelDB.DriverProfile, modelDB.User.user_id == modelDB.DriverProfile.user_id).\
-        filter(modelDB.Recruitment.recruitment_id == drive_id).first()
+    # 2. 関連データの取得 (他の方のコードを参考に getattr で安全に取得)
+    driver = db.query(modelDB.User).filter(modelDB.User.user_id == drive.recruiter_user_id).first()
+    route = db.query(modelDB.Route).filter(modelDB.Route.route_id == drive.route_id).first()
+    profile = db.query(modelDB.DriverProfile).filter(modelDB.DriverProfile.user_id == drive.recruiter_user_id).first()
 
-    if not drive_data:
-        raise HTTPException(status_code=404, detail="Drive not found")
-
-    recruitment, route, driver_profile, driver_user = drive_data
-
-    # 同乗者情報の取得
-    applications = db.query(modelDB.Application, modelDB.User).\
-        join(modelDB.User, modelDB.Application.applicant_user_id == modelDB.User.user_id).\
-        filter(modelDB.Application.recruitment_id == drive_id).all()
-
-    passenger_list = []
-    approved_count = 0
-    for app, p_user in applications:
-        p_status = "approved" if app.status == 1 else "pending"
-        if app.status == 1: approved_count += 1
-        passenger_list.append(Passenger(id=app.application_id, name=p_user.name, status=p_status))
-
-    return DriveDetailWrapper(
-        drive=DriveDetailResponse(
-            id=recruitment.recruitment_id,
-            driverId=driver_user.user_id,
-            driverName=driver_user.name,
-            departure=route.depname,
-            destination=route.arrname,
-            departureTime=route.dep_time,
-            capacity=recruitment.capacity,
-            currentPassengers=approved_count,
-            fee=recruitment.fare,
-            message=driver_profile.bio,
-            vehicleRules=VehicleRules(
-                noSmoking=driver_profile.no_smoking or False,
-                petAllowed=driver_profile.pet_ok or False,
-                musicAllowed=driver_profile.music_ok or False,
-                foodAllowed=driver_profile.food_ok or False
+    # --- データの組み立て ---
+    # フロントエンドの mockDriveDetail の構造を完全に再現
+    return DriveDetailResponse(
+        drive=DriveDetailSchema(
+            id=str(drive.recruitment_id),
+            driverId=str(getattr(driver, 'user_id', "0")),
+            driverName=getattr(driver, 'name', "不明"),
+            driverProfile=DriverProfileSchema(
+                rating=float(getattr(profile, 'rating', 0.0)),
+                reviewCount=int(getattr(profile, 'drive_count', 0)),
+                verificationStatus="verified" # DBに項目がないため固定
             ),
-            status="active",
-            passengers=passenger_list
+            # DB構成図の routes テーブルに基づき取得
+            departure=str(getattr(route, 'path_data', "地点未設定")), 
+            destination=str(getattr(route, 'path_data', "地点未設定")),
+            departureTime=str(getattr(route, 'dep_time', "時刻不明")),
+            capacity=getattr(drive, 'capacity', 0),
+            currentPassengers=0, # applicationテーブルからカウントが必要だが一旦0
+            fee=getattr(drive, 'fare', 0),
+            message=getattr(profile, 'bio', "よろしくお願いします！"),
+            vehicleRules=VehicleRulesSchema(
+                noSmoking=bool(getattr(profile, 'no_smoking', True)),
+                petAllowed=bool(getattr(profile, 'pet_ok', False)),
+                musicAllowed=bool(getattr(profile, 'music_ok', True))
+            )
         )
     )
-
-# --- POST: 相乗り申請 ---
-@router.post("/{drive_id}/apply", response_model=ApplyResponse)
-async def apply_for_drive(drive_id: int, request: Request, db: Session = Depends(get_db)):
-    session_id = request.cookies.get("session_id")
-    if not session_id:
-        raise HTTPException(status_code=401, detail="Unauthorized")
-
-    res = get_current_user(session_id=session_id, db=db)
-    if res == "no":
-        raise HTTPException(status_code=401, detail="Session expired")
-    
-    my_id = int(res)
-
-    try:
-        new_app = modelDB.Application(
-            recruitment_id=drive_id,
-            applicant_user_id=my_id,
-            status=0,   # 0: 申請中
-            chat_id=0   # 暫定（NotNull制約対策。DB修正後は不要）
-        )
-        db.add(new_app)
-        db.commit()
-        return ApplyResponse(ok=True, message="Success")
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=str(e))

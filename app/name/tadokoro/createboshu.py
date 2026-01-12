@@ -147,7 +147,7 @@ async def regist_recruitment(
         # Recruitment登録
         new_recruitment = modelDB.Recruitment(
             recruiter_user_id=user_id,
-            status=1,  # 募集中
+            status=0,  # 募集中
             fare=data.fee,
             capacity=data.capacity,
             type=1,    # 同乗者募集
