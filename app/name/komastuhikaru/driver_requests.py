@@ -1,12 +1,14 @@
-from fastapi import APIRouter, Depends, HTTPException, Response, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
+# ★追加: DB側での型キャスト用
+from sqlalchemy import cast, Numeric
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import List
 from datetime import datetime
 import sys
-import time
-import numpy as np
-from geopy.geocoders import Nominatim
+# import time  <-- 削除
+# import numpy as np <-- 削除
+# from geopy.geocoders import Nominatim <-- 削除
 
 # パス設定
 sys.path.append('..')
@@ -14,48 +16,11 @@ from db_setting import SessionLocal
 import modelDB
 from app.name.hieda.user import get_current_user
 
-# ルーター定義
 router = APIRouter(prefix="/api/driver", tags=["driver"])
 
 # ---------------------------------------------------------
-# Helper Functions
+# Helper Functions -> 削除 (DB内で完結するため不要)
 # ---------------------------------------------------------
-def get_location_name(lat, lon) -> str:
-    if lat is None or lon is None:
-        return "場所情報なし"
-    try:
-        lat_f = float(lat)
-        lon_f = float(lon)
-        geolocator = Nominatim(user_agent="my_ride_share_app_requests_v3", timeout=5)
-        location = geolocator.reverse((lat_f, lon_f), language='ja')
-        
-        if location:
-            addr = location.raw.get('address', {})
-            city = addr.get('city', addr.get('town', addr.get('village', '')))
-            road = addr.get('road', '')
-            suburb = addr.get('suburb', addr.get('neighbourhood', ''))
-            state = addr.get('province', addr.get('state', ''))
-            
-            if city and road: return f"{city} {road}"
-            if city and suburb: return f"{city} {suburb}"
-            return state if state else location.address.split(',')[0]
-    except Exception as e:
-        print(f"GeoError: {e}")
-        pass
-    return f"地点({lat}, {lon})"
-
-def calculate_similarity(vec1: List[float], vec2: List[float]) -> int:
-    if vec1 is None or vec2 is None: return 0
-    try:
-        v1 = np.array(vec1)
-        v2 = np.array(vec2)
-        norm1 = np.linalg.norm(v1)
-        norm2 = np.linalg.norm(v2)
-        if norm1 == 0 or norm2 == 0: return 0
-        cos_sim = np.dot(v1, v2) / (norm1 * norm2)
-        return int(max(0, cos_sim) * 100)
-    except Exception:
-        return 0
 
 # ---------------------------------------------------------
 # Pydantic Models
@@ -90,37 +55,52 @@ def get_db():
 @router.get("/requests", response_model=ApplicationListResponse)
 async def get_driver_requests(request: Request, status: str = "pending", db: Session = Depends(get_db)):
     """
-    申請一覧取得
+    申請一覧取得 (pgvector対応版)
     """
-    # クッキーからセッションIDを取得
+    # 1. 認証
     session_id = request.cookies.get("session_id")
-
     if not session_id:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
     res = get_current_user(session_id=session_id, db=db)
-
-    # セッションIDが有効かどうかを確認
     if res == "no":
         raise HTTPException(status_code=401, detail="Invalid session")
     
     current_driver_id = int(res)
 
-    # ドライバーのベクトル取得
+    # 2. ドライバー自身のベクトル取得
     driver_profile = db.query(modelDB.DriverProfile).filter(
         modelDB.DriverProfile.user_id == current_driver_id
     ).first()
     driver_embedding = driver_profile.embedding if driver_profile else None
 
-    # データ取得 (status=0: pending)
+    # 3. データ取得 (status=0: pending)
     target_status = 0
-    results = db.query(
-        modelDB.Application,
-        modelDB.Recruitment,
-        modelDB.User,
-        modelDB.PassengerProfile,
-        modelDB.Route
-    ).join(
+
+    # 申請者のPassengerProfileとの距離を計算するクエリを構築
+    if driver_embedding is not None:
+        # pgvectorのcosine_distanceを使用
+        dist_col = modelDB.PassengerProfile.embedding.cosine_distance(driver_embedding).label("v_dist")
+        query = db.query(
+            modelDB.Application,
+            modelDB.Recruitment,
+            modelDB.User,
+            modelDB.PassengerProfile,
+            modelDB.Route,
+            dist_col
+        )
+    else:
+        # ベクトルがない場合は距離Noneとして扱う
+        query = db.query(
+            modelDB.Application,
+            modelDB.Recruitment,
+            modelDB.User,
+            modelDB.PassengerProfile,
+            modelDB.Route,
+            cast(None, Numeric).label("v_dist")
+        )
+
+    results = query.join(
         modelDB.Recruitment,
         modelDB.Application.recruitment_id == modelDB.Recruitment.recruitment_id
     ).join(
@@ -137,21 +117,23 @@ async def get_driver_requests(request: Request, status: str = "pending", db: Ses
         modelDB.Application.status == target_status
     ).all()
 
-    # 整形
+    # 4. 整形
     response_list = []
-    for app, recruit, user, profile, route in results:
+    for app, recruit, user, profile, route, v_dist in results:
         try:
             rating_val = float(profile.rating) if profile else 0.0
             review_count_val = profile.ride_count if profile else 0
             
-            # マッチング率計算
-            passenger_embedding = profile.embedding if profile else None
-            match_rate = calculate_similarity(driver_embedding, passenger_embedding)
+            # マッチング率計算 (1 - コサイン距離) * 100
+            current_dist = float(v_dist) if v_dist is not None else None
+            if current_dist is not None:
+                match_rate = int(max(0, min(100, (1 - current_dist) * 100)))
+            else:
+                match_rate = 50 # デフォルト値
 
-            # 住所変換（API制限回避のため待機）
-            time.sleep(1.0) 
-            dep_str = get_location_name(route.dep_latitude, route.dep_longitude)
-            des_str = get_location_name(route.arr_latitude, route.arr_longitude)
+            # DBに保存された地名をそのまま使用
+            dep_str = route.depname if route.depname else "出発地情報なし"
+            des_str = route.arrname if route.arrname else "目的地情報なし"
             
             dep_time_str = route.dep_time.strftime('%Y/%m/%d %H:%M')
             created_at_str = datetime.now().strftime('%Y/%m/%d')

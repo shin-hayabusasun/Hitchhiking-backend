@@ -188,9 +188,11 @@ async def get_my_drives(
             elif recruitment.status == 2: status_str = "completed"
             elif recruitment.status == 3: status_str = "cancelled"
 
-            # ★修正: float()変換を削除し、値をそのまま関数へ渡す（関数内で安全に変換）
-            departure_name = get_location_name(route.dep_latitude, route.dep_longitude)
-            destination_name = get_location_name(route.arr_latitude, route.arr_longitude)
+            # # ★修正: float()変換を削除し、値をそのまま関数へ渡す（関数内で安全に変換）
+            # departure_name = get_location_name(route.dep_latitude, route.dep_longitude)
+            # destination_name = get_location_name(route.arr_latitude, route.arr_longitude)
+            departure_name = route.depname if route.depname else "出発地未設定"
+            destination_name = route.arrname if route.arrname else "目的地未設定"
 
             response_list.append(DriveResponse(
                 id=recruitment.recruitment_id,
