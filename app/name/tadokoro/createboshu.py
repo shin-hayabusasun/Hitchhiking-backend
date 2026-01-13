@@ -59,8 +59,8 @@ def get_actual_route(start_lat, start_lon, end_lat, end_lon):
 # --- スキーマ定義 ---
 
 class RecruitmentCreate(BaseModel):
-    departure: str
-    destination: str
+    departure: str # 地名
+    destination: str #  地名
     departureDate: str  # YYYY-MM-DD
     departureTime: str  # HH:mm
     capacity: int
@@ -137,7 +137,9 @@ async def regist_recruitment(
             dep_longitude=dep_lon,
             arr_time=arr_datetime,
             arr_latitude=arr_lat,
-            arr_longitude=arr_lon
+            arr_longitude=arr_lon,
+            arrname=data.destination,
+            depname=data.departure
         )
         db.add(new_route)
         db.flush()
@@ -145,7 +147,7 @@ async def regist_recruitment(
         # Recruitment登録
         new_recruitment = modelDB.Recruitment(
             recruiter_user_id=user_id,
-            status=1,  # 募集中
+            status=0,  # 募集中
             fare=data.fee,
             capacity=data.capacity,
             type=1,    # 同乗者募集
@@ -189,7 +191,8 @@ async def get_my_recruitments(request: Request, db: Session = Depends(get_db)):
     ).join(
         modelDB.PassengerProfile, modelDB.User.user_id == modelDB.PassengerProfile.user_id
     ).filter(
-        modelDB.Recruitment.recruiter_user_id == user_id
+        modelDB.Recruitment.recruiter_user_id == user_id,
+        modelDB.Recruitment.type == 1  # ここに追加
     ).all()
 
     response_data = []
@@ -209,8 +212,8 @@ async def get_my_recruitments(request: Request, db: Session = Depends(get_db)):
             userName=user.name,
             rating=str(profile.rating),
             reviews=str(profile.ride_count),
-            from_location=f"{route.dep_latitude}, {route.dep_longitude}",
-            to_location=f"{route.arr_latitude}, {route.arr_longitude}",
+            from_location=route.depname,
+            to_location=route.arrname,
             date=route.dep_time.strftime("%m-%d %H:%M"),
             people=str(rec.capacity),
             price=str(rec.fare)
@@ -293,6 +296,8 @@ async def update_recruitment(
             route.arr_time = arr_datetime
             route.arr_latitude = arr_lat
             route.arr_longitude = arr_lon
+            route.depname = data.departure
+            route.arrname = data.destination
 
         # 7. Recruitmentテーブルの更新
         recruitment.fare = data.fee
@@ -370,8 +375,8 @@ async def get_recruitment_detail(
         capacity=rec.capacity,
         fare=rec.fare,
         message="", 
-        departure_name=None,
-        destination_name=None
+        departure_name=route.depname,
+        destination_name=route.arrname
     )
 
     return RecruitmentDetailResponse(ok=True, data=detail)
