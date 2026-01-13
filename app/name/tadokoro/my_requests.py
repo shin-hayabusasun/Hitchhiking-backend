@@ -1,15 +1,18 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response, Request
 from sqlalchemy.orm import Session
-from pydantic import BaseModel
-from typing import List, Dict, Any
+from pydantic import BaseModel, Field, ConfigDict # ConfigDictを追加
+from typing import List, Optional
 import sys
+import os
 
-# --- 共通インポート ---
-sys.path.append('..')
+# パス設定
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../..')))
+
 from db_setting import SessionLocal
 import modelDB
+from app.name.hieda.user import get_current_user
 
-router = APIRouter(prefix="/api/hitchhiker", tags=["MyRequest"])
+router = APIRouter(prefix="/api", tags=["MyRequests"])
 
 def get_db():
     db = SessionLocal()
@@ -18,74 +21,116 @@ def get_db():
     finally:
         db.close()
 
-# --- レスポンス型定義 ---
+# ---------------------------------------------------------
+# Pydantic モデル定義 (ここを修正しました)
+# ---------------------------------------------------------
 class RequestItem(BaseModel):
+    # 最新のPydanticではFieldを使ってエイリアスを指定するのが確実です
     id: int
+    recruitment_id: int
     name: str
     rating: float
     reviews: int
-    from_location: str  # JSONでは 'from' ですがPython予約語回避のため
-    to: str
-    date: str
+    from_loc: str = Field(..., alias="from") # JSONでは "from" になる
+    to_loc: str = Field(..., alias="to")     # JSONでは "to" になる
     time: str
+    date: str
     price: int
-    status: str
+    status: int
+
+    # エイリアス（from/to）を使っても、Python内で普通に値を入れられるようにする設定
+    model_config = ConfigDict(populate_by_name=True)
+
+class MyRequestsData(BaseModel):
+    requesting: List[RequestItem]
+    approved: List[RequestItem]
+    completed: List[RequestItem]
 
 class MyRequestsResponse(BaseModel):
     success: bool
-    data: Dict[str, List[Dict[str, Any]]]
+    data: Optional[MyRequestsData] = None
+    message: Optional[str] = None
 
-@router.get("/my-requests", response_model=MyRequestsResponse)
-async def get_my_requests(user_id: int = 1, db: Session = Depends(get_db)):
-    """
-    自分が「同乗者」として申請したリクエスト一覧を取得する
-    user_id は本来ログインセッションから取得しますが、一旦 1 固定にしています
-    """
+class ActionResponse(BaseModel):
+    success: bool
+    message: str
+
+# ---------------------------------------------------------
+# API実装
+# ---------------------------------------------------------
+
+@router.get("/hitchhiker/my-requests", response_model=MyRequestsResponse)
+async def get_my_requests(request: Request, db: Session = Depends(get_db)):
+    session_id = request.cookies.get("session_id")
+    if not session_id:
+        # success: False を返してフロント側でリダイレクトさせる
+        return MyRequestsResponse(success=False, message="ログインしていません")
+
+    res_user_id = get_current_user(session_id=session_id, db=db)
+    if res_user_id == "no":
+        return MyRequestsResponse(success=False, message="セッションが無効です")
     
-    # 1. 自分が申請した application を取得
-    # applications -> recruitments -> routes / users (driver) / driver_profiles
-    applications = db.query(modelDB.Application).filter(modelDB.Application.applicant_user_id == user_id).all()
+    current_user_id = int(res_user_id)
 
-    all_list = []
+    try:
+        results = db.query(
+            modelDB.Application,
+            modelDB.Recruitment,
+            modelDB.Route,
+            modelDB.User,
+            modelDB.DriverProfile
+        ).join(modelDB.Recruitment, modelDB.Application.recruitment_id == modelDB.Recruitment.recruitment_id)\
+         .join(modelDB.Route, modelDB.Recruitment.route_id == modelDB.Route.route_id)\
+         .join(modelDB.User, modelDB.Recruitment.recruiter_user_id == modelDB.User.user_id)\
+         .outerjoin(modelDB.DriverProfile, modelDB.Recruitment.recruiter_user_id == modelDB.DriverProfile.user_id)\
+         .filter(modelDB.Application.applicant_user_id == current_user_id)\
+         .all()
 
-    for app in applications:
-        # 募集データ取得
-        drive = db.query(modelDB.Recruitment).filter(modelDB.Recruitment.recruitment_id == app.recruitment_id).first()
-        if not drive: continue
-        
-        # ドライバー、経路、プロフィールの取得 (getattrで安全に)
-        driver = db.query(modelDB.User).filter(modelDB.User.user_id == drive.recruiter_user_id).first()
-        route = db.query(modelDB.Route).filter(modelDB.Route.route_id == drive.route_id).first()
-        profile = db.query(modelDB.DriverProfile).filter(modelDB.DriverProfile.user_id == drive.recruiter_user_id).first()
-
-        # フロントのモックデータ形式に変換
-        item = {
-            "id": app.application_id,
-            "name": getattr(driver, 'name', "不明"),
-            "rating": float(getattr(profile, 'rating', 0.0)),
-            "reviews": int(getattr(profile, 'drive_count', 0)),
-            "from": str(getattr(route, 'dep_point', "未設定")), # UIの'from'に対応
-            "to": str(getattr(route, 'arr_point', "未設定")),
-            "date": str(getattr(app, 'applied_at', "2025-01-01"))[:10], # 申請日
-            "time": str(getattr(route, 'dep_time', "不明")),
-            "price": getattr(drive, 'fare', 0),
-            "status": getattr(app, 'status', "pending") # 'pending', 'approved', 'completed'
+        data_structure = {
+            "requesting": [],
+            "approved": [],
+            "completed": []
         }
-        all_list.append(item)
 
-    # 2. フロントエンドの期待通り、ステータスごとに振り分ける
-    response_data = {
-        "requesting": [i for i in all_list if i["status"] == "pending"],
-        "approved": [i for i in all_list if i["status"] == "approved"],
-        "completed": [i for i in all_list if i["status"] == "completed"]
-    }
+        for app, recruit, route, driver, profile in results:
+            fmt_time = route.dep_time.strftime("%H:%M") if route.dep_time else "-"
+            fmt_date = route.dep_time.strftime("%Y/%m/%d") if route.dep_time else "-"
 
-    # データが空の場合の「予備モックデータ」挿入 (テスト用)
-    if not all_list:
-        response_data["requesting"] = [{
-            "id": 0, "name": "田中 太郎(Mock)", "rating": 4.8, "reviews": 45,
-            "from": "東京駅", "to": "横浜駅", "date": "2025-11-03",
-            "time": "2025-11-05 09:00", "price": 800, "status": "pending"
-        }]
+            d_rating = float(profile.rating) if profile and profile.rating else 0.0
+            d_reviews = int(profile.drive_count) if profile and profile.drive_count else 0
 
-    return MyRequestsResponse(success=True, data=response_data)
+            # 辞書形式で作ってからRequestItemに渡すのが最も安全です
+            item_data = {
+                "id": app.application_id,
+                "recruitment_id": recruit.recruitment_id,
+                "name": driver.name,
+                "rating": d_rating,
+                "reviews": d_reviews,
+                "from_loc": route.depname,
+                "to_loc": route.arrname,
+                "time": fmt_time,
+                "date": fmt_date,
+                "price": int(recruit.fare),
+                "status": app.status
+            }
+            
+            item = RequestItem(**item_data)
+
+            if app.status == 0:
+                data_structure["requesting"].append(item)
+            elif app.status == 1:
+                data_structure["approved"].append(item)
+            else:
+                data_structure["completed"].append(item)
+
+        return MyRequestsResponse(
+            success=True, 
+            data=MyRequestsData(**data_structure)
+        )
+
+    except Exception as e:
+        print(f"Error fetching requests: {e}")
+        # 詳細なエラーを返すと原因が分かりやすくなります
+        return MyRequestsResponse(success=False, message=str(e))
+
+# cancel_application は変更なしでOK
