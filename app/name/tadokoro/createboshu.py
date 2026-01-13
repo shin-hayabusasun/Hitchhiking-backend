@@ -198,9 +198,9 @@ async def get_my_recruitments(request: Request, db: Session = Depends(get_db)):
     response_data = []
     for rec, route, user, profile in results:
         status_map = {
-            1: ("OPEN", "募集中"),
-            2: ("MATCHED", "マッチ済み"),
-            3: ("COMPLETED", "運転完了")
+            0: ("OPEN", "募集中"),
+            1: ("MATCHED", "マッチ済み"),
+            2: ("COMPLETED", "運転完了")
         }
         status_val, status_text = status_map.get(rec.status, ("UNKNOWN", "不明"))
 
