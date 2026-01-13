@@ -129,3 +129,116 @@ async def regist_drive(data: DriveCreateRequest, request: Request, db: Session =
         db.rollback()
         print(f"ERROR: {e}")
         raise HTTPException(status_code=500, detail=f"DB登録失敗: {str(e)}")
+    
+# スキーマの追加（詳細取得レスポンス用）
+class DriveDetailResponse(BaseModel):
+    departure: str
+    destination: str
+    departure_time: str  # HTMLの datetime-local 用に文字列で返す
+    capacity: int
+    fee: int
+    message: str = ""
+    # 車両ルール（プロフィールから取得）
+    no_smoking: bool
+    pet_allowed: bool
+    music_allowed: bool
+    food_allowed: bool
+
+# 1. 募集詳細の取得 (GET)
+@router.get("/schedules/{recruitment_id}", response_model=DriveDetailResponse)
+async def get_drive_detail(
+    recruitment_id: int, 
+    request: Request, 
+    db: Session = Depends(get_db)
+):
+    # ユーザー認証
+    session_id = request.cookies.get("session_id")
+    user_id_str = get_current_user(session_id=session_id, db=db)
+    if user_id_str == "no":
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    my_id = int(user_id_str)
+
+    # データの取得
+    rec = db.query(modelDB.Recruitment).filter(
+        modelDB.Recruitment.recruitment_id == recruitment_id,
+        modelDB.Recruitment.recruiter_user_id == my_id
+    ).first()
+
+    if not rec:
+        raise HTTPException(status_code=404, detail="募集が見つかりません")
+
+    route = db.query(modelDB.Route).filter(modelDB.Route.route_id == rec.route_id).first()
+    profile = db.query(modelDB.DriverProfile).filter(modelDB.DriverProfile.user_id == my_id).first()
+
+    return DriveDetailResponse(
+        departure=route.depname if route else "",
+        destination=route.arrname if route else "",
+        # フロントの datetime-local 形式 (YYYY-MM-DDTHH:mm) に変換
+        departure_time=route.dep_time.strftime("%Y-%m-%dT%H:%M") if route else "",
+        capacity=rec.capacity,
+        fee=rec.fare,
+        message="", # 必要に応じてテーブルに追加してください
+        no_smoking=profile.no_smoking if profile else True,
+        pet_allowed=profile.pet_ok if profile else False,
+        music_allowed=profile.music_ok if profile else True,
+        food_allowed=profile.food_ok if profile else True
+    )
+
+# 2. 募集情報の更新 (PUT)
+@router.put("/schedules/{recruitment_id}")
+async def update_drive(
+    recruitment_id: int, 
+    data: DriveCreateRequest, # regist_driveと同じスキーマを再利用
+    request: Request, 
+    db: Session = Depends(get_db)
+):
+    session_id = request.cookies.get("session_id")
+    user_id_str = get_current_user(session_id=session_id, db=db)
+    if user_id_str == "no":
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    my_id = int(user_id_str)
+
+    # 既存データの確認
+    rec = db.query(modelDB.Recruitment).filter(
+        modelDB.Recruitment.recruitment_id == recruitment_id,
+        modelDB.Recruitment.recruiter_user_id == my_id
+    ).first()
+
+    if not rec:
+        raise HTTPException(status_code=404, detail="対象の募集が見つかりません")
+
+    route = db.query(modelDB.Route).filter(modelDB.Route.route_id == rec.route_id).first()
+
+    try:
+        # 地点が変更されている場合は座標と経路を再計算
+        if route.depname != data.departure or route.arrname != data.destination:
+            dep_lat, dep_lon = get_coordinates(data.departure)
+            arr_lat, arr_lon = get_coordinates(data.destination)
+            path_points, duration_sec = get_actual_route(dep_lat, dep_lon, arr_lat, arr_lon)
+            
+            route.dep_latitude = dep_lat
+            route.dep_longitude = dep_lon
+            route.arr_latitude = arr_lat
+            route.arr_longitude = arr_lon
+            route.path_data = json.dumps(path_points)
+            route.depname = data.departure
+            route.arrname = data.destination
+        else:
+            # 時間計算のみ（地名が変わっていない場合でも時間は変わる可能性があるため）
+            _, duration_sec = get_actual_route(route.dep_latitude, route.dep_longitude, route.arr_latitude, route.arr_longitude)
+
+        # 時間の更新
+        dep_dt = datetime.strptime(f"{data.departureDate} {data.departureTime}", "%Y-%m-%d %H:%M")
+        route.dep_time = dep_dt
+        route.arr_time = dep_dt + timedelta(seconds=duration_sec)
+
+        # 募集情報の更新
+        rec.fare = data.fee
+        rec.capacity = data.capacity
+
+        db.commit()
+        return {"ok": True, "message": "更新が完了しました"}
+
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"更新失敗: {str(e)}")
