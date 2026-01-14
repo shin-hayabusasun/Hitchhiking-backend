@@ -83,7 +83,7 @@ async def regist_drive(data: DriveCreateRequest, request: Request, db: Session =
         dep_dt = datetime.strptime(f"{data.departureDate} {data.departureTime}", "%Y-%m-%d %H:%M")
         arr_dt = dep_dt + timedelta(seconds=duration_sec)
 
-        # 3. Route(経路)の登録（depname, arrnameを保存）
+        # 3. Route(経路)の登録
         new_route = modelDB.Route(
             recruiter_user_id=user_id,
             path_data=json.dumps(path_points),
@@ -93,21 +93,31 @@ async def regist_drive(data: DriveCreateRequest, request: Request, db: Session =
             arr_time=arr_dt,
             arr_latitude=arr_lat,
             arr_longitude=arr_lon,
-            depname=data.departure,  # ★地名を保存
-            arrname=data.destination  # ★地名を保存
+            depname=data.departure,
+            arrname=data.destination
         )
         db.add(new_route)
         db.flush()
 
-        # 4. プロフィールからルールを取得
+        # 4. プロフィール情報の取得とメッセージ(bio)の更新
         profile = db.query(modelDB.DriverProfile).filter(modelDB.DriverProfile.user_id == user_id).first()
         
-        # プロフィールの値をRecruitmentに引き継ぐ（Recruitment側に保存する場合）
-        # もしRecruitment側にカラムがない場合はこの変数は省略可
-        no_smoking = profile.no_smoking if profile else True
-        pet_ok = profile.pet_ok if profile else False
-        food_ok = profile.food_ok if profile else True
-        music_ok = profile.music_ok if profile else True
+        if profile:
+            # 入力された message を bio (紹介文) として更新する
+            profile.bio = data.message
+        else:
+            # プロフィールが存在しない場合は新規作成
+            new_profile = modelDB.DriverProfile(
+                user_id=user_id,
+                bio=data.message,
+                rating=5.0,
+                drive_count=0,
+                car_model="トヨタ プリウス", # 初期値が必要な場合
+                car_color="白",
+                car_year="2022年",
+                car_number="品川 300 あ 12-34"
+            )
+            db.add(new_profile)
 
         # 5. Recruitment(募集)の登録
         new_rec = modelDB.Recruitment(
@@ -117,8 +127,6 @@ async def regist_drive(data: DriveCreateRequest, request: Request, db: Session =
             capacity=data.capacity,
             type=0,     # 0: 運転者からの募集
             route_id=new_route.route_id
-            # もしRecruitment側にルールカラムがあるなら以下を追加
-            # , no_smoking=no_smoking, pet_ok=pet_ok ...
         )
         db.add(new_rec)
         db.commit()
