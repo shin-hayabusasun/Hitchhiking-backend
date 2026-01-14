@@ -1,136 +1,124 @@
-from fastapi import APIRouter, Depends, HTTPException, Response, Request
-from sqlalchemy.orm import Session
-from pydantic import BaseModel, Field, ConfigDict # ConfigDictを追加
-from typing import List, Optional
+import logging
 import sys
 import os
+from typing import List, Dict
 
-# パス設定
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../..')))
+from fastapi import APIRouter, Depends, HTTPException, Request
+from sqlalchemy.orm import Session
+from pydantic import BaseModel
 
-from db_setting import SessionLocal
+# パス解決
+current_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.abspath(os.path.join(current_dir, '../../..'))
+if project_root not in sys.path:
+    sys.path.append(project_root)
+
 import modelDB
+from db_setting import SessionLocal
 from app.name.hieda.user import get_current_user
 
-router = APIRouter(prefix="/api", tags=["MyRequests"])
+logger = logging.getLogger(__name__)
+router = APIRouter(prefix="/api/hitchhiker", tags=["MyRequests"])
 
 def get_db():
     db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+    try: yield db
+    finally: db.close()
 
-# ---------------------------------------------------------
-# Pydantic モデル定義 (ここを修正しました)
-# ---------------------------------------------------------
-class RequestItem(BaseModel):
-    # 最新のPydanticではFieldを使ってエイリアスを指定するのが確実です
-    id: int
-    recruitment_id: int
-    name: str
-    rating: float
-    reviews: int
-    from_loc: str = Field(..., alias="from") # JSONでは "from" になる
-    to_loc: str = Field(..., alias="to")     # JSONでは "to" になる
-    time: str
-    date: str
-    price: int
-    status: int
-
-    # エイリアス（from/to）を使っても、Python内で普通に値を入れられるようにする設定
-    model_config = ConfigDict(populate_by_name=True)
-
-class MyRequestsData(BaseModel):
-    requesting: List[RequestItem]
-    approved: List[RequestItem]
-    completed: List[RequestItem]
-
-class MyRequestsResponse(BaseModel):
-    success: bool
-    data: Optional[MyRequestsData] = None
-    message: Optional[str] = None
-
-class ActionResponse(BaseModel):
-    success: bool
-    message: str
-
-# ---------------------------------------------------------
-# API実装
-# ---------------------------------------------------------
-
-@router.get("/hitchhiker/my-requests", response_model=MyRequestsResponse)
+# --- 1. マイリクエスト一覧 (GET /api/hitchhiker/my-requests) ---
+@router.get("/my-requests")
 async def get_my_requests(request: Request, db: Session = Depends(get_db)):
     session_id = request.cookies.get("session_id")
-    if not session_id:
-        # success: False を返してフロント側でリダイレクトさせる
-        return MyRequestsResponse(success=False, message="ログインしていません")
+    user_id_res = get_current_user(session_id=session_id, db=db)
+    if user_id_res == "no": raise HTTPException(status_code=401)
+    my_id = int(user_id_res)
 
-    res_user_id = get_current_user(session_id=session_id, db=db)
-    if res_user_id == "no":
-        return MyRequestsResponse(success=False, message="セッションが無効です")
-    
-    current_user_id = int(res_user_id)
+    results = db.query(
+        modelDB.Application, modelDB.Recruitment, modelDB.Route,
+        modelDB.User, modelDB.DriverProfile
+    ).join(modelDB.Recruitment, modelDB.Application.recruitment_id == modelDB.Recruitment.recruitment_id)\
+     .join(modelDB.Route, modelDB.Recruitment.route_id == modelDB.Route.route_id)\
+     .join(modelDB.User, modelDB.Recruitment.recruiter_user_id == modelDB.User.user_id)\
+     .outerjoin(modelDB.DriverProfile, modelDB.User.user_id == modelDB.DriverProfile.user_id)\
+     .filter(modelDB.Application.applicant_user_id == my_id).all()
 
-    try:
-        results = db.query(
-            modelDB.Application,
-            modelDB.Recruitment,
-            modelDB.Route,
-            modelDB.User,
-            modelDB.DriverProfile
-        ).join(modelDB.Recruitment, modelDB.Application.recruitment_id == modelDB.Recruitment.recruitment_id)\
-         .join(modelDB.Route, modelDB.Recruitment.route_id == modelDB.Route.route_id)\
-         .join(modelDB.User, modelDB.Recruitment.recruiter_user_id == modelDB.User.user_id)\
-         .outerjoin(modelDB.DriverProfile, modelDB.Recruitment.recruiter_user_id == modelDB.DriverProfile.user_id)\
-         .filter(modelDB.Application.applicant_user_id == current_user_id)\
-         .all()
+    requesting, approved, completed = [], [], []
 
-        data_structure = {
-            "requesting": [],
-            "approved": [],
-            "completed": []
+    for app, recruit, route, user, prof in results:
+        item = {
+            "id": app.application_id,
+            "recruitmentId": recruit.recruitment_id,
+            "name": user.name,
+            "date": route.dep_time.strftime("%Y-%m-%d"),
+            "rating": float(prof.rating) if prof else 0.0,
+            "reviews": prof.drive_count if prof else 0,
+            "from_loc": route.depname,
+            "to_loc": route.arrname,
+            "time": route.dep_time.strftime("%H:%M"),
+            "price": recruit.fare
         }
+        if app.status == 0: requesting.append(item)
+        elif app.status == 1:
+            if recruit.status == 2: completed.append(item)
+            else: approved.append(item)
 
-        for app, recruit, route, driver, profile in results:
-            fmt_time = route.dep_time.strftime("%H:%M") if route.dep_time else "-"
-            fmt_date = route.dep_time.strftime("%Y/%m/%d") if route.dep_time else "-"
+    return {"success": True, "data": {"requesting": requesting, "approved": approved, "completed": completed}}
 
-            d_rating = float(profile.rating) if profile and profile.rating else 0.0
-            d_reviews = int(profile.drive_count) if profile and profile.drive_count else 0
+# --- 2. 特定のドライブ詳細 (GET /api/hitchhiker/drives/{id}) ---
+# 参考APIの構造を完全に網羅
+@router.get("/drives/{id}")
+async def get_drive_detail(id: int, db: Session = Depends(get_db)):
+    drive = db.query(modelDB.Recruitment).filter(modelDB.Recruitment.recruitment_id == id).first()
+    if not drive: raise HTTPException(status_code=404, detail="Drive not found")
 
-            # 辞書形式で作ってからRequestItemに渡すのが最も安全です
-            item_data = {
-                "id": app.application_id,
-                "recruitment_id": recruit.recruitment_id,
-                "name": driver.name,
-                "rating": d_rating,
-                "reviews": d_reviews,
-                "from_loc": route.depname,
-                "to_loc": route.arrname,
-                "time": fmt_time,
-                "date": fmt_date,
-                "price": int(recruit.fare),
-                "status": app.status
+    driver = db.query(modelDB.User).filter(modelDB.User.user_id == drive.recruiter_user_id).first()
+    route = db.query(modelDB.Route).filter(modelDB.Route.route_id == drive.route_id).first()
+    profile = db.query(modelDB.DriverProfile).filter(modelDB.DriverProfile.user_id == drive.recruiter_user_id).first()
+
+    status_map = {0: "募集中", 1: "募集終了", 2: "運転完了"}
+
+    return {
+        "drive": {
+            "id": str(drive.recruitment_id),
+            "driverName": getattr(driver, 'name', "不明"),
+            "departure": getattr(route, 'depname', "不明"),
+            "destination": getattr(route, 'arrname', "不明"),
+            "departureTime": route.dep_time.strftime("%Y-%m-%d %H:%M") if route else "",
+            "fee": drive.fare,
+            "capacity": drive.capacity,
+            "status": status_map.get(drive.status, "不明"),
+            "vehicle": {
+                "model": getattr(profile, 'car_model', "未設定"),
+                "color": getattr(profile, 'car_color', "-"),
+                "year": getattr(profile, 'car_year', "-"),
+                "number": getattr(profile, 'car_number', "-")
+            },
+            "driverProfile": {
+                "rating": float(getattr(profile, 'rating', 0.0)),
+                "reviewCount": int(getattr(profile, 'drive_count', 0)),
+                "bio": getattr(profile, 'bio', "よろしくお願いします！")
+            },
+            "vehicleRules": {
+                "noSmoking": bool(getattr(profile, 'no_smoking', True)),
+                "petAllowed": bool(getattr(profile, 'pet_ok', False)),
+                "musicAllowed": bool(getattr(profile, 'music_ok', True))
             }
-            
-            item = RequestItem(**item_data)
+        }
+    }
 
-            if app.status == 0:
-                data_structure["requesting"].append(item)
-            elif app.status == 1:
-                data_structure["approved"].append(item)
-            else:
-                data_structure["completed"].append(item)
+# --- 3. 申請取り消し (DELETE /api/hitchhiker/cancel-request/{id}) ---
+@router.delete("/cancel-request/{id}")
+async def cancel_request(id: int, request: Request, db: Session = Depends(get_db)):
+    session_id = request.cookies.get("session_id")
+    res = get_current_user(session_id, db)
+    if res == "no": raise HTTPException(status_code=401)
+    
+    app = db.query(modelDB.Application).filter(
+        modelDB.Application.application_id == id,
+        modelDB.Application.applicant_user_id == int(res)
+    ).first()
 
-        return MyRequestsResponse(
-            success=True, 
-            data=MyRequestsData(**data_structure)
-        )
-
-    except Exception as e:
-        print(f"Error fetching requests: {e}")
-        # 詳細なエラーを返すと原因が分かりやすくなります
-        return MyRequestsResponse(success=False, message=str(e))
-
-# cancel_application は変更なしでOK
+    if not app: raise HTTPException(status_code=404)
+    db.delete(app)
+    db.commit()
+    return {"success": True}
