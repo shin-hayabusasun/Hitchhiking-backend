@@ -16,6 +16,7 @@ services:
   db:
     image: ankane/pgvector:v0.5.1
     environment:
+
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: shunya
       POSTGRES_DB: testdb

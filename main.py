@@ -70,10 +70,10 @@ app.include_router(driverhensyu.router)
 #ユーザー関連エンドポイントインポート 田所end 70行
 
 #ユーザー関連エンドポイントインポート 黒星start 72行 
-
-
-
- 
+from app.name.koroboshi import mypage
+app.include_router(mypage.router)
+from app.name.koroboshi import driver 
+app.include_router(driver.router)
 
 
 
@@ -138,9 +138,6 @@ from app.name.goto import settings
 app.include_router(settings.router)
 
  
-
-
-
 
 
 
