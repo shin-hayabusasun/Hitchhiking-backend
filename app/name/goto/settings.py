@@ -47,6 +47,20 @@ class ProfileUpdateRequest(BaseModel):
     address: str
     password: Optional[str] = None 
 
+# --- プロフィール取得 (返す型) ---
+class ProfileResponse(BaseModel):
+    lastName: str
+    firstName: str
+    email: str
+    # ★住所の分割パーツを定義
+    zipCode: str | None = None
+    prefecture: str | None = None
+    city: str | None = None
+    address: str | None = None # ここには「番地」を入れる
+    
+    birthDate: str | None = None
+    hasIdentityDoc: bool
+
 class SuccessResponse(BaseModel):
     success: bool
 
@@ -83,13 +97,17 @@ class CardUpdateRequest(BaseModel):
     code: int
 
 # --- 決済関連 ---
+
 class PaymentRequest(BaseModel):
     amount: int
+
 
 class PaymentResponse(BaseModel):
     transactionId: str
     status: str
     paidAt: str
+    amount: int
+    message: str
 
 
 # ==========================================
@@ -120,41 +138,115 @@ async def get_user_info(request: Request, db: Session = Depends(get_db)):
     )
 
 # 機能2: プロフィール更新
+# 2.1 プロフィール情報の取得 (GET)
+@router.get("/users/me/profile", response_model=ProfileResponse)
+async def get_profile(request: Request, db: Session = Depends(get_db)):
+    # ... (セッションチェックなどは省略。今まで通り) ...
+    session_id = request.cookies.get("session_id")
+    if not session_id: raise HTTPException(status_code=401, detail="No session")
+    res = get_current_user(session_id=session_id, db=db)
+    if res == "no": raise HTTPException(status_code=401, detail="Invalid session")
+    user_id = int(res)
+    target_user = db.query(modelDB.User).filter(modelDB.User.user_id == user_id).first()
+    if not target_user: raise HTTPException(status_code=404, detail="User not found")
+
+    # --- 名前の分割 ---
+    full_name = target_user.name or ""
+    if " " in full_name:
+        last_name, first_name = full_name.split(" ", 1)
+    elif "　" in full_name:
+        last_name, first_name = full_name.split("　", 1)
+    else:
+        last_name = full_name
+        first_name = ""
+
+    # --- ★住所の分割ロジック (ここが核心！) ---
+    # DBの文字列: "100-0001 東京都 千代田区 1-1-1" を想定
+    raw_address = target_user.address or ""
+    
+    # 全角スペースがあれば半角に置換して統一する
+    raw_address = raw_address.replace("　", " ")
+    
+    # スペースで分割する
+    addr_parts = raw_address.split(" ")
+    
+    # 配列の長さによって割り振る
+    # デフォルトは空文字
+    res_zip = ""
+    res_pref = ""
+    res_city = ""
+    res_addr = ""
+
+    if len(addr_parts) >= 1:
+        res_zip = addr_parts[0] # 1つ目は郵便番号
+    
+    if len(addr_parts) >= 2:
+        res_pref = addr_parts[1] # 2つ目は都道府県
+        
+    if len(addr_parts) >= 3:
+        res_city = addr_parts[2] # 3つ目は市区町村
+        
+    if len(addr_parts) >= 4:
+        # 4つ目以降はすべて結合して「番地」とする
+        res_addr = " ".join(addr_parts[3:])
+    
+    # もしスペース区切りじゃないデータが入っていた場合（古いデータなど）、
+    # とりあえず全部「番地」に入れておく救済措置
+    if len(addr_parts) == 1 and raw_address != "":
+        res_addr = raw_address
+        res_zip = "" # クリア
+
+    # --- 生年月日 ---
+    birth_date_str = target_user.birth_date.strftime('%Y-%m-%d') if target_user.birth_date else ""
+    
+    # --- 本人確認書類 ---
+    has_doc = True if target_user.identity_doc else False
+
+    return {
+        "lastName": last_name,
+        "firstName": first_name,
+        "email": target_user.email,
+        
+        # 分割した住所を返す
+        "zipCode": res_zip,
+        "prefecture": res_pref,
+        "city": res_city,
+        "address": res_addr, # 番地
+
+        "birthDate": birth_date_str,
+        "hasIdentityDoc": has_doc
+    }
+
+# 2.2 プロフィール情報の更新 (PUT)
 @router.put("/users/me/profile", response_model=SuccessResponse)
 async def update_profile(
     profile_data: ProfileUpdateRequest, 
     request: Request, 
     db: Session = Depends(get_db)
 ):
+    # ... (セッションチェックなどは省略。今まで通り) ...
     session_id = request.cookies.get("session_id")
-    if not session_id:
-        raise HTTPException(status_code=401, detail="No session")
-
+    if not session_id: raise HTTPException(status_code=401, detail="No session")
     res = get_current_user(session_id=session_id, db=db)
-    if res == "no":
-        raise HTTPException(status_code=401, detail="Invalid session")
-
+    if res == "no": raise HTTPException(status_code=401, detail="Invalid session")
     user_id = int(res)
     target_user = db.query(modelDB.User).filter(modelDB.User.user_id == user_id).first()
+    if not target_user: raise HTTPException(status_code=404, detail="User not found")
 
-    if not target_user:
-        raise HTTPException(status_code=404, detail="User not found")
-
-    # データの更新処理
+    # 更新処理
     target_user.name = f"{profile_data.lastName} {profile_data.firstName}"
-    # 【重要修正】以前のコードでは target_user.email でしたが、
-    # DBのカラム名は恐らく mail なので修正しています。もしエラーが出る場合はここを確認。
     target_user.email = profile_data.email 
-    target_user.address = profile_data.address
     
-    # 生年月日
+    # ★住所の更新 (フロント側ですでに結合された文字列が来るので、そのまま入れる)
+    target_user.address = profile_data.address 
+    
+    # ... (生年月日・パスワード処理はそのまま) ...
     try:
         date_obj = datetime.strptime(profile_data.birthDate, '%Y-%m-%d').date()
         target_user.birth_date = date_obj
     except ValueError:
         pass 
 
-    # パスワード変更
     if profile_data.password and len(profile_data.password) > 0:
         hashed_password = pwd_context.hash(profile_data.password)
         target_user.password = hashed_password
@@ -166,7 +258,6 @@ async def update_profile(
         raise HTTPException(status_code=500, detail="Update failed")
 
     return SuccessResponse(success=True)
-
 
 # 5.13.3 本人確認書類アップロード（Hiedaさんの方式に合わせる）
 @router.post("/users/me/identity-document", response_model=SuccessResponse)
@@ -277,3 +368,55 @@ async def update_notifications(settings: NotificationSettingsSchema, request: Re
     
     db.commit()
     return {"message": "success"}
+
+
+# 決済関連 (API実装: デモ用・DB保存あり)
+
+@router.post("/payment/transactions", response_model=PaymentResponse)
+async def process_payment(
+    payment_data: PaymentRequest,
+    request: Request,
+    db: Session = Depends(get_db)
+):
+    # 1. セッションチェック (ログインしているか確認)
+    session_id = request.cookies.get("session_id")
+    if not session_id:
+        raise HTTPException(status_code=401, detail="No session")
+
+    res = get_current_user(session_id=session_id, db=db)
+    if res == "no":
+        raise HTTPException(status_code=401, detail="Invalid session")
+    
+    user_id = int(res)
+
+    # 2. データベースに履歴を保存する
+    
+    
+    # transaction_id をランダムな数値で生成 (DB定義がIntegerのため)
+    dummy_tx_id = random.randint(10000000, 99999999)
+    
+    # Paymentモデルを作成
+    new_payment = modelDB.Payment(
+        user_id=user_id,
+        card_number=4242,  # デモ用ダミーカード番号 
+        transaction_id=dummy_tx_id,
+        status=1,          # 1 = 成功 (Success) と仮定して保存
+        billing_date=datetime.now()
+    )
+    
+    try:
+        db.add(new_payment)
+        db.commit()
+        db.refresh(new_payment)
+    except Exception as e:
+        db.rollback()
+        print(f"Payment DB Error: {e}")
+
+    # 3. フロントエンドへのレスポンス
+    return {
+        "transactionId": str(dummy_tx_id),
+        "status": "completed",
+        "paidAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), # DB保存日時または現在時刻
+        "amount": payment_data.amount,
+        "message": "決済が完了しました"
+    }
