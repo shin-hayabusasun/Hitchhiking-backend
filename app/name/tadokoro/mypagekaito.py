@@ -145,17 +145,10 @@ async def update_bio(
             p_profile.bio = body.bio
             p_profile.embedding = new_embedding
 
-        # ② DriverProfile の更新 (存在する場合のみ)
-        d_profile = db.query(modelDB.DriverProfile).filter(
-            modelDB.DriverProfile.user_id == user_id
-        ).first()
         
-        if d_profile:
-            d_profile.bio = body.bio
-            d_profile.embedding = new_embedding
 
         # どちらのプロフィールも見つからない場合
-        if not p_profile and not d_profile:
+        if not p_profile :
             raise HTTPException(status_code=404, detail="プロフィールが見つかりません")
 
         db.commit() # 確定
