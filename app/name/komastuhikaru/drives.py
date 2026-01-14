@@ -171,7 +171,8 @@ async def get_my_drives(
                 join(modelDB.User, modelDB.Application.applicant_user_id == modelDB.User.user_id).\
                 filter(
                     modelDB.Application.recruitment_id == recruitment.recruitment_id,
-                    modelDB.Application.status == 1 
+                    modelDB.Application.status == 1,
+                    modelDB.Recruitment.type == 0  # <--- ★これを追加！(0:運転者募集)
                 ).all()
 
             passenger_list = []
