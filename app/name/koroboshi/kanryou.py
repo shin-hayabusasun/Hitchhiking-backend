@@ -36,7 +36,7 @@ def get_db():
 
 @router.get("/completion", response_model=ProgressResponse)
 async def get_completion_drives(request: Request, db: Session = Depends(get_db)):
-    # 1. セッションから自分のIDを特定
+    # 1. 認証
     session_id = request.cookies.get("session_id")
     res = get_current_user(session_id=session_id, db=db)
     if res == "no":
@@ -45,22 +45,21 @@ async def get_completion_drives(request: Request, db: Session = Depends(get_db))
 
     final_list = []
 
-    # パターンA: 自分が「運転者（募集者）」だった完了済みドライブ
-    # -> 相手（同乗者/申請者）の情報を取得
-    driver_side = db.query(
-        modelDB.Recruitment, modelDB.Route, modelDB.Application, 
-        modelDB.User, modelDB.PassengerProfile
+    # --- パターンA: 自分が「運転者募集(Type:0)」のホストだった場合 ---
+    # 相手は「申請してきた同乗者(Applicant)」
+    driver_host = db.query(
+        modelDB.Recruitment, modelDB.Route, modelDB.User, modelDB.PassengerProfile
     ).join(modelDB.Route, modelDB.Recruitment.route_id == modelDB.Route.route_id)\
      .join(modelDB.Application, modelDB.Recruitment.recruitment_id == modelDB.Application.recruitment_id)\
      .join(modelDB.User, modelDB.Application.applicant_user_id == modelDB.User.user_id)\
      .join(modelDB.PassengerProfile, modelDB.User.user_id == modelDB.PassengerProfile.user_id)\
      .filter(
          modelDB.Recruitment.recruiter_user_id == my_id,
-         modelDB.Recruitment.status == 2, # 完了
-         modelDB.Application.status == 1  # 承認済みだったもの
+         modelDB.Recruitment.status == 2,      # 完了済み
+         modelDB.Application.status >= 1       # 承認(1)または完了(2)
      ).all()
 
-    for rec, route, app, user, prof in driver_side:
+    for rec, route, user, prof in driver_host:
         final_list.append(ProgressDriveItem(
             id=str(rec.recruitment_id),
             from_loc=route.depname,
@@ -68,28 +67,27 @@ async def get_completion_drives(request: Request, db: Session = Depends(get_db))
             datetime=route.dep_time.strftime('%Y-%m-%d %H:%M'),
             price=rec.fare,
             driver=DriverInfo(
-                name=user.name, # 相手の名前
+                name=user.name, # 相手(同乗者)の名前
                 rating=float(prof.rating),
                 driveCount=prof.ride_count
             )
         ))
 
-    # パターンB: 自分が「同乗者（申請者）」だった完了済みドライブ
-    # -> 相手（運転者/募集者）の情報を取得
-    passenger_side = db.query(
-        modelDB.Application, modelDB.Recruitment, modelDB.Route,
-        modelDB.User, modelDB.PassengerProfile
-    ).join(modelDB.Recruitment, modelDB.Application.recruitment_id == modelDB.Recruitment.recruitment_id)\
-     .join(modelDB.Route, modelDB.Recruitment.route_id == modelDB.Route.route_id)\
+    # --- パターンB: 自分が「同乗者募集(Type:1)」に対しドライバーとして応募した場合 ---
+    # 相手は「募集を出した同乗者(Recruiter)」
+    driver_guest = db.query(
+        modelDB.Recruitment, modelDB.Route, modelDB.User, modelDB.PassengerProfile
+    ).join(modelDB.Route, modelDB.Recruitment.route_id == modelDB.Route.route_id)\
+     .join(modelDB.Application, modelDB.Recruitment.recruitment_id == modelDB.Application.recruitment_id)\
      .join(modelDB.User, modelDB.Recruitment.recruiter_user_id == modelDB.User.user_id)\
      .join(modelDB.PassengerProfile, modelDB.User.user_id == modelDB.PassengerProfile.user_id)\
      .filter(
-         modelDB.Application.applicant_user_id == my_id,
-         modelDB.Application.status == 1,
-         modelDB.Recruitment.status == 2
+         modelDB.Application.applicant_user_id == my_id, # 自分が応募側
+         modelDB.Recruitment.status == 2,
+         modelDB.Application.status >= 1
      ).all()
 
-    for app, rec, route, user, prof in passenger_side:
+    for rec, route, user, prof in driver_guest:
         final_list.append(ProgressDriveItem(
             id=str(rec.recruitment_id),
             from_loc=route.depname,
@@ -97,7 +95,7 @@ async def get_completion_drives(request: Request, db: Session = Depends(get_db))
             datetime=route.dep_time.strftime('%Y-%m-%d %H:%M'),
             price=rec.fare,
             driver=DriverInfo(
-                name=user.name, # 相手の名前
+                name=user.name, # 相手(同乗者)の名前
                 rating=float(prof.rating),
                 driveCount=prof.ride_count
             )

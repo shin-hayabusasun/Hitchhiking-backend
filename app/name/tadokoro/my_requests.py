@@ -26,43 +26,6 @@ def get_db():
     finally: db.close()
 
 # --- 1. マイリクエスト一覧 (GET /api/hitchhiker/my-requests) ---
-@router.get("/my-requests")
-async def get_my_requests(request: Request, db: Session = Depends(get_db)):
-    session_id = request.cookies.get("session_id")
-    user_id_res = get_current_user(session_id=session_id, db=db)
-    if user_id_res == "no": raise HTTPException(status_code=401)
-    my_id = int(user_id_res)
-
-    results = db.query(
-        modelDB.Application, modelDB.Recruitment, modelDB.Route,
-        modelDB.User, modelDB.DriverProfile
-    ).join(modelDB.Recruitment, modelDB.Application.recruitment_id == modelDB.Recruitment.recruitment_id)\
-     .join(modelDB.Route, modelDB.Recruitment.route_id == modelDB.Route.route_id)\
-     .join(modelDB.User, modelDB.Recruitment.recruiter_user_id == modelDB.User.user_id)\
-     .outerjoin(modelDB.DriverProfile, modelDB.User.user_id == modelDB.DriverProfile.user_id)\
-     .filter(modelDB.Application.applicant_user_id == my_id).all()
-
-    requesting, approved, completed = [], [], []
-
-    for app, recruit, route, user, prof in results:
-        item = {
-            "id": app.application_id,
-            "recruitmentId": recruit.recruitment_id,
-            "name": user.name,
-            "date": route.dep_time.strftime("%Y-%m-%d"),
-            "rating": float(prof.rating) if prof else 0.0,
-            "reviews": prof.drive_count if prof else 0,
-            "from_loc": route.depname,
-            "to_loc": route.arrname,
-            "time": route.dep_time.strftime("%H:%M"),
-            "price": recruit.fare
-        }
-        if app.status == 0: requesting.append(item)
-        elif app.status == 1:
-            if recruit.status == 2: completed.append(item)
-            else: approved.append(item)
-
-    return {"success": True, "data": {"requesting": requesting, "approved": approved, "completed": completed}}
 
 # --- 2. 特定のドライブ詳細 (GET /api/hitchhiker/drives/{id}) ---
 # 参考APIの構造を完全に網羅
