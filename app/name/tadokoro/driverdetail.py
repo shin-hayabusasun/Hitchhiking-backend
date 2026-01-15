@@ -1,19 +1,14 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from pydantic import BaseModel
-from typing import Optional, List
 import sys
+import os
 
-# --- 共通インポート ---
-sys.path.append('..')
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../..')))
 from db_setting import SessionLocal
 import modelDB
 
-# フロントエンドの fetch('/api/drives/${id}') に合わせるため
-# 本来は prefix="/api/drives" ですが、他の方の形式に合わせて定義します
-router = APIRouter(prefix="/api/drives", tags=["DriveDetail"])
+router = APIRouter(prefix="/api", tags=["DriveDetail"])
 
-# DBセッション取得用
 def get_db():
     db = SessionLocal()
     try:
@@ -21,98 +16,75 @@ def get_db():
     finally:
         db.close()
 
-# --- フロントエンドの Interface とモック構造に合わせたレスポンス型定義 ---
-class DriverProfileSchema(BaseModel):
-    rating: float
-    reviewCount: int
-    verificationStatus: str
-
-class VehicleRulesSchema(BaseModel):
-    noSmoking: bool
-    petAllowed: bool
-    musicAllowed: bool
-
-class DriveDetailSchema(BaseModel):
-    id: str
-    driverId: str
-    driverName: str
-    driverProfile: DriverProfileSchema
-    departure: str
-    destination: str
-    departureTime: str
-    capacity: int
-    currentPassengers: int
-    fee: int
-    message: str
-    vehicleRules: VehicleRulesSchema
-
-class DriveDetailResponse(BaseModel):
-    drive: DriveDetailSchema
-
-# --- API 処理 ---
-# フロントエンドが `/api/drives/${id}` と送るため、パスパラメータ {id} を使用
-@router.get("/{id}", response_model=DriveDetailResponse)
+# ---------------------------------------------------------
+# 1. 特定のドライブの詳細を取得（同乗者向け）
+# ---------------------------------------------------------
+@router.get("/drives/{id}")
 async def get_drive_detail(id: int, db: Session = Depends(get_db)):
-    """
-    フロントエンドのドライブ詳細画面用API
-    
-    1. recruitments (募集) を取得
-    2. users (ドライバー名) を取得
-    3. routes (出発・到着) を取得
-    4. driver_profiles (車両ルール・評価) を取得
-    """
-    
-    # 1. 募集データの取得 (設計書の recruitment_id)
     drive = db.query(modelDB.Recruitment).filter(modelDB.Recruitment.recruitment_id == id).first()
-    
     if not drive:
-        # DBにデータがない場合は、フロントが止まらないよう「モックデータ」を返却する
-        return DriveDetailResponse(
-            drive=DriveDetailSchema(
-                id=str(id),
-                driverId="mock_id",
-                driverName="田中 太郎(Mock)",
-                driverProfile=DriverProfileSchema(rating=4.8, reviewCount=45, verificationStatus="verified"),
-                departure="東京駅",
-                destination="横浜駅",
-                departureTime="2025-11-05 09:00",
-                capacity=2,
-                currentPassengers=0,
-                fee=800,
-                message="DBにデータがないためモックを表示しています。",
-                vehicleRules=VehicleRulesSchema(noSmoking=True, petAllowed=False, musicAllowed=True)
-            )
-        )
+        raise HTTPException(status_code=404, detail="Drive not found")
 
-    # 2. 関連データの取得 (他の方のコードを参考に getattr で安全に取得)
     driver = db.query(modelDB.User).filter(modelDB.User.user_id == drive.recruiter_user_id).first()
     route = db.query(modelDB.Route).filter(modelDB.Route.route_id == drive.route_id).first()
     profile = db.query(modelDB.DriverProfile).filter(modelDB.DriverProfile.user_id == drive.recruiter_user_id).first()
 
-    # --- データの組み立て ---
-    # フロントエンドの mockDriveDetail の構造を完全に再現
-    return DriveDetailResponse(
-        drive=DriveDetailSchema(
-            id=str(drive.recruitment_id),
-            driverId=str(getattr(driver, 'user_id', "0")),
-            driverName=getattr(driver, 'name', "不明"),
-            driverProfile=DriverProfileSchema(
-                rating=float(getattr(profile, 'rating', 0.0)),
-                reviewCount=int(getattr(profile, 'drive_count', 0)),
-                verificationStatus="verified" # DBに項目がないため固定
-            ),
-            # DB構成図の routes テーブルに基づき取得
-            departure=str(getattr(route, 'path_data', "地点未設定")), 
-            destination=str(getattr(route, 'path_data', "地点未設定")),
-            departureTime=str(getattr(route, 'dep_time', "時刻不明")),
-            capacity=getattr(drive, 'capacity', 0),
-            currentPassengers=0, # applicationテーブルからカウントが必要だが一旦0
-            fee=getattr(drive, 'fare', 0),
-            message=getattr(profile, 'bio', "よろしくお願いします！"),
-            vehicleRules=VehicleRulesSchema(
-                noSmoking=bool(getattr(profile, 'no_smoking', True)),
-                petAllowed=bool(getattr(profile, 'pet_ok', False)),
-                musicAllowed=bool(getattr(profile, 'music_ok', True))
-            )
-        )
-    )
+    status_map = {0: "募集中", 1: "募集終了", 2: "運転完了"}
+
+    return {
+        "drive": {
+            "id": str(drive.recruitment_id),
+            "driverName": getattr(driver, 'name', "不明"),
+            "departure": getattr(route, 'depname', "不明"),
+            "destination": getattr(route, 'arrname', "不明"),
+            "departureTime": route.dep_time.strftime("%Y-%m-%d %H:%M") if route else "",
+            "fee": drive.fare,
+            "capacity": drive.capacity,
+            "status": status_map.get(drive.status, "不明"),
+            "vehicle": {
+                "model": getattr(profile, 'car_model', "未設定"),
+                "color": getattr(profile, 'car_color', "-"),
+                "year": getattr(profile, 'car_year', "-"),
+                "number": getattr(profile, 'car_number', "-")
+            },
+            "driverProfile": {
+                "rating": float(getattr(profile, 'rating', 0.0)),
+                "reviewCount": int(getattr(profile, 'drive_count', 0)),
+                "bio": getattr(profile, 'bio', "よろしくお願いします！")
+            },
+            "vehicleRules": {
+                "noSmoking": bool(getattr(profile, 'no_smoking', True)),
+                "petAllowed": bool(getattr(profile, 'pet_ok', False)),
+                "musicAllowed": bool(getattr(profile, 'music_ok', True))
+            }
+        }
+    }
+
+# ---------------------------------------------------------
+# 2. 運転者向けの「届いた申請一覧」を取得
+# ---------------------------------------------------------
+@router.get("/driver/requests")
+async def get_driver_requests(status: int = 0, db: Session = Depends(get_db)):
+    # 申請、ユーザー、ルート情報を結合して取得
+    results = db.query(
+        modelDB.Application,
+        modelDB.User,
+        modelDB.Route
+    ).join(modelDB.User, modelDB.Application.applicant_user_id == modelDB.User.user_id)\
+     .join(modelDB.Recruitment, modelDB.Application.recruitment_id == modelDB.Recruitment.recruitment_id)\
+     .join(modelDB.Route, modelDB.Recruitment.route_id == modelDB.Route.route_id)\
+     .filter(modelDB.Application.status == status).all()
+
+    return {"requests": [
+        {
+            "id": app.application_id,
+            "passengerName": user.name,
+            "matchingRate": 95, # ロジック未実装のためダミー
+            "rating": 4.5,      # ロジック未実装のためダミー
+            "reviewCount": 10,  # ロジック未実装のためダミー
+            "departure": route.depname,
+            "destination": route.arrname,
+            "departureTime": route.dep_time.strftime("%m/%d %H:%M"),
+            "createdAt": app.application_id # IDをキーにしているため適宜調整
+        } for app, user, route in results
+    ]}
