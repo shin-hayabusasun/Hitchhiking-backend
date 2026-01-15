@@ -5,7 +5,7 @@ from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime
 import sys
-import numpy as np # 高速計算用
+# numpy は不要になったため削除
 
 # パス設定
 sys.path.append('..')
@@ -22,28 +22,6 @@ def get_db():
         yield db
     finally:
         db.close()
-
-def calculate_cosine_similarity(vec1, vec2) -> int:
-    """
-    ベクトルのコサイン類似度を計算し、0-100のスコアで返す
-    numpyを使用しているため高速です。
-    """
-    if vec1 is None or vec2 is None:
-        return 50 # どちらかのデータがない場合は中間値を返す
-    try:
-        v1 = np.array(vec1)
-        v2 = np.array(vec2)
-        norm1 = np.linalg.norm(v1)
-        norm2 = np.linalg.norm(v2)
-        
-        if norm1 == 0 or norm2 == 0:
-            return 50
-            
-        cos_sim = np.dot(v1, v2) / (norm1 * norm2)
-        # -1~1 を 0~100 に変換 (近いほど100)
-        return int(max(0, cos_sim) * 100)
-    except Exception:
-        return 50
 
 # --- Pydantic Models ---
 class PassengerDetail(BaseModel):
@@ -89,6 +67,7 @@ async def get_request_detail(
 ):
     """
     同乗者募集の詳細を取得する
+    検索APIと同じロジック（DB内計算）でマッチング率を計算します。
     """
     # 1. 認証 (ドライバー)
     session_id = request.cookies.get("session_id")
@@ -103,14 +82,30 @@ async def get_request_detail(
     ).first()
     driver_embedding = driver_profile.embedding if driver_profile else None
 
-    # 3. 募集情報の取得 (type=1: 同乗者募集)
-    # Recruitment, Route, User(Passenger), PassengerProfile を結合
-    target = db.query(
-        modelDB.Recruitment,
-        modelDB.Route,
-        modelDB.User,
-        modelDB.PassengerProfile
-    ).join(
+    # 3. クエリ構築 (検索APIと同じDB内計算を使用)
+    if driver_embedding is not None:
+        # pgvectorのcosine_distanceを利用してDB内で計算
+        # これにより検索一覧と全く同じスコアが得られます
+        dist_col = modelDB.PassengerProfile.embedding.cosine_distance(driver_embedding).label("v_dist")
+        query = db.query(
+            modelDB.Recruitment,
+            modelDB.Route,
+            modelDB.User,
+            modelDB.PassengerProfile,
+            dist_col  # 計算結果（距離）も一緒に取得
+        )
+    else:
+        # ベクトルがない場合は距離なし(None)として扱う
+        query = db.query(
+            modelDB.Recruitment,
+            modelDB.Route,
+            modelDB.User,
+            modelDB.PassengerProfile,
+            cast(None, Numeric).label("v_dist")
+        )
+
+    # 4. 募集情報の取得 (type=1: 同乗者募集)
+    target = query.join(
         modelDB.Route, modelDB.Recruitment.route_id == modelDB.Route.route_id
     ).join(
         modelDB.User, modelDB.Recruitment.recruiter_user_id == modelDB.User.user_id
@@ -118,25 +113,32 @@ async def get_request_detail(
         modelDB.PassengerProfile, modelDB.User.user_id == modelDB.PassengerProfile.user_id
     ).filter(
         modelDB.Recruitment.recruitment_id == request_id,
-        modelDB.Recruitment.type == 1  # 同乗者募集のみ対象
+        modelDB.Recruitment.type == 1 
     ).first()
 
     if not target:
         raise HTTPException(status_code=404, detail="募集が見つかりません")
 
-    recruit, route, user, profile = target
+    # アンパック（v_dist が追加されています）
+    recruit, route, user, profile, v_dist = target
 
-    # 4. データ整形
+    # 5. データ整形
     
-    # ★地名はDBから直接取得 (逆ジオコーディング不要で高速)
+    # DBから地名を直接取得
     origin_name = getattr(route, 'depname', '出発地不明')
     arr_name = getattr(route, 'arrname', '目的地不明')
 
-    # ★マッチングスコア計算 (numpy)
-    passenger_embedding = profile.embedding if profile else None
-    score = calculate_cosine_similarity(driver_embedding, passenger_embedding)
+    # ★マッチングスコア計算 (距離 -> スコア変換)
+    # v_dist はコサイン距離 (0~2)。 0に近いほど似ている。
+    current_dist = float(v_dist) if v_dist is not None else None
+    
+    if current_dist is not None:
+        # (1 - 距離) * 100 で類似度(%)に変換
+        match_score = int(max(0, min(100, (1 - current_dist) * 100)))
+    else:
+        match_score = 50 # デフォルト
 
-    # 年齢計算 (簡易ロジック)
+    # 年齢計算
     age = 0
     if user.birth_date:
         today = datetime.today()
@@ -164,7 +166,7 @@ async def get_request_detail(
             profileImage="", 
             bio=profile.bio if profile else ""
         ),
-        matchingScore=score
+        matchingScore=match_score
     )
 
     return ResponseData(success=True, data=res_data)
@@ -185,7 +187,7 @@ async def respond_to_request(
     if user_id_str == "no": raise HTTPException(status_code=401)
     current_driver_id = int(user_id_str)
 
-    # 排他制御付きで募集を取得 (with_for_update)
+    # 排他制御付きで募集を取得
     recruit = db.query(modelDB.Recruitment).filter(
         modelDB.Recruitment.recruitment_id == data.recruitment_id,
         modelDB.Recruitment.type == 1, # 同乗者募集
@@ -199,22 +201,29 @@ async def respond_to_request(
         # 1. 募集ステータスを「マッチ済み(2)」に変更
         recruit.status = 2
         
-        # 2. Applicationレコードを作成 (即承認状態: status=1)
-        # applicant_user_id は「応募した側（ドライバー）」になります
+        # 2. Applicationレコードを作成
+        # chat_id=None で作成し、循環参照エラーを回避
         new_app = modelDB.Application(
             recruitment_id=recruit.recruitment_id,
             applicant_user_id=current_driver_id, 
             status=1, # 承認済み
-            chat_id=0 
+            chat_id=None 
         )
         
-        # チャットルームの作成
-        new_chat = modelDB.Chat(message="マッチングが成立しました！よろしくお願いします。")
-        db.add(new_chat)
-        db.flush()
-        new_app.chat_id = new_chat.chat_id
-
         db.add(new_app)
+        db.flush() # ID発行
+        
+        # 3. Chatレコードを作成
+        new_chat = modelDB.Chat(
+            message="マッチングが成立しました！よろしくお願いします。",
+            application_id=new_app.application_id 
+        )
+        db.add(new_chat)
+        db.flush() # ID発行
+
+        # 4. ApplicationにChatIDを紐付け
+        new_app.chat_id = new_chat.chat_id
+        
         db.commit()
 
         return ResponseData(success=True)
