@@ -37,6 +37,7 @@ async def approve_application(request: Request, id: int = Path(..., title="Appli
     申請承認
     1. 申請ステータスを承認(1)に変更
     2. チャットルームを作成し、Applicationと紐付ける
+    3. 募集ステータスをマッチ済み(1)に変更
     """
     session_id = request.cookies.get("session_id")
     if not session_id: raise HTTPException(status_code=401, detail="Unauthorized")
@@ -58,32 +59,33 @@ async def approve_application(request: Request, id: int = Path(..., title="Appli
     if not application:
         raise HTTPException(status_code=404, detail="Application not found or unauthorized")
 
-    # ★追加: 既に処理済みの場合はエラーにする（二重承認防止）
+    # 二重承認防止
     if application.status != 0:
         raise HTTPException(status_code=400, detail="This application has already been processed")
 
     try:
-        # 2. ステータスを承認(1)に変更
+        # 2. 申請ステータスを承認(1)に変更
         application.status = 1 
         
-        # ★追加: チャットルームの作成 (まだ紐付いていない場合)
+        # チャットルームの作成 (まだ紐付いていない場合)
         if application.chat_id is None:
-            # 新しいチャットを作成
             new_chat = modelDB.Chat(
                 message="マッチングが成立しました！チャットを開始してください。",
                 application_id=application.application_id 
-                # ↑ models.py の定義によっては application_id が必要ない場合もあるので確認してください
-                # 以前の会話では「Chatにapplication_idがある」設計でした
             )
             db.add(new_chat)
             db.flush() # ID発行
             
-            # ApplicationにチャットIDを紐付け
             application.chat_id = new_chat.chat_id
 
-        # 3. 募集自体のステータスも「マッチ済み」にする必要がある場合
-        # recruitment = db.query(modelDB.Recruitment).filter(modelDB.Recruitment.recruitment_id == application.recruitment_id).first()
-        # recruitment.status = 2 # マッチ済み
+        # 3. 募集自体のステータスも「マッチ済み」にする
+        # ★修正: コメントアウトを解除し、ステータスを 1 (matched) に設定
+        recruitment = db.query(modelDB.Recruitment).filter(
+            modelDB.Recruitment.recruitment_id == application.recruitment_id
+        ).first()
+        
+        if recruitment:
+            recruitment.status = 1  # 0:募集中 -> 1:マッチ済み
 
         db.commit()
         return ActionResponse(message="承認しました")
