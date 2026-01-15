@@ -175,8 +175,8 @@ def list_tables():
     return {"tables": tables}
 
 
-
-
+from app.name.tadokoro import getmyreq
+app.include_router(getmyreq.router)
 from app.name.nori import adminmg
 app.include_router(adminmg.router)
 from app.name.nori import adminuser

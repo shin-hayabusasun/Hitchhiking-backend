@@ -81,6 +81,7 @@ class Req(BaseModel):
 def get_coordinates(address: str):
     if not address or not address.strip():
         return None, None
+    # 2026年時点のユーザーエージェント設定
     geocoder = Nominatim(user_agent="hitchhiker_app_v2026", timeout=10)
     try:
         location = geocoder.geocode(f"{address}, Japan")
@@ -105,7 +106,7 @@ def get_min_distance_to_path(point_p, path_points):
 # --- APIエンドポイント ---
 @router.post("/boshukensaku", response_model=cardresponse)
 async def search_recruitments(req: Req, request: Request, db: Session = Depends(get_db)):
-    logger.info("=== 検索開始（ベクトル類似度マッチング） ===")
+    logger.info("=== 検索開始（ベクトル類似度マッチング + 自己投稿除外） ===")
     
     # 1. 認証チェック
     session_id = request.cookies.get("session_id")
@@ -115,7 +116,7 @@ async def search_recruitments(req: Req, request: Request, db: Session = Depends(
     if user_id == "no":
         raise HTTPException(status_code=401, detail="Invalid session")
 
-    # 2. 自分のプロフィールベクトルを取得
+    # 2. 自分のプロフィールベクトルを取得（マッチング精度計算用）
     my_profile = db.query(modelDB.PassengerProfile).filter(modelDB.PassengerProfile.user_id == user_id).first()
     my_embedding = my_profile.embedding if my_profile else None
     
@@ -129,7 +130,7 @@ async def search_recruitments(req: Req, request: Request, db: Session = Depends(
 
     # 4. 基本クエリ作成（ベクトル距離計算を含む）
     if my_embedding is not None:
-        # pgvectorのコサイン距離を計算
+        # pgvectorを使用してドライバーとの嗜好性の距離を計算
         dist_col = modelDB.DriverProfile.embedding.cosine_distance(my_embedding).label("v_dist")
         query = db.query(modelDB.Recruitment, dist_col)
     else:
@@ -144,17 +145,21 @@ async def search_recruitments(req: Req, request: Request, db: Session = Depends(
     )
 
     # --- SQLフィルタリング ---
-    # 現在時刻以降
+    
+    # 【重要】自分の投稿は検索結果から除外する
+    query = query.filter(modelDB.Recruitment.recruiter_user_id != user_id)
+
+    # 現在時刻以降の出発便のみ
     query = query.filter(modelDB.Route.dep_time >= datetime.now())
 
-    # 運賃・座席
+    # 運賃・座席数のフィルタ
     if f.priceRange.min is not None:
         query = query.filter(modelDB.Recruitment.fare >= f.priceRange.min)
     if f.priceRange.max is not None:
         query = query.filter(modelDB.Recruitment.fare <= f.priceRange.max)
     query = query.filter(modelDB.Recruitment.capacity >= f.seats)
 
-    # 日付フィルタ
+    # 日付フィルタ（YYYY-MM-DD形式）
     if f.date:
         try:
             target_date = datetime.strptime(f.date, '%Y-%m-%d').date()
@@ -162,41 +167,40 @@ async def search_recruitments(req: Req, request: Request, db: Session = Depends(
         except ValueError:
             logger.warning(f"不正な日付形式: {f.date}")
 
-    # 時間帯
+    # 出発時間帯のフィルタ
     if f.timeRange and (f.timeRange.start != "00:00" or f.timeRange.end != "23:59"):
         start_hour = int(f.timeRange.start.split(":")[0])
         end_hour = int(f.timeRange.end.split(":")[0])
         query = query.filter(extract('hour', modelDB.Route.dep_time).between(start_hour, end_hour))
 
-    # 固定条件（募集中、通常募集）
+    # ステータス固定条件（募集中=0、通常募集=0）
     query = query.filter(modelDB.Recruitment.status == 0, modelDB.Recruitment.type == 0)
 
-    # 車両条件
+    # 車両内条件のフィルタ
     c = f.conditions
     if c.nonSmoking: query = query.filter(modelDB.DriverProfile.no_smoking == True)
     if c.petsAllowed: query = query.filter(modelDB.DriverProfile.pet_ok == True)
     if c.foodAllowed: query = query.filter(modelDB.DriverProfile.food_ok == True)
     if c.musicAllowed: query = query.filter(modelDB.DriverProfile.music_ok == True)
 
-    # ベクトル距離順にソート
+    # 嗜好性が近い順（ベクトル距離昇順）にソート
     if my_embedding is not None:
         query = query.order_by(asc("v_dist"))
 
     sql_results = query.all()
-    logger.info(f"SQLフィルタリング完了: {len(sql_results)} 件ヒットしました。")
+    logger.info(f"SQLフィルタリング完了: {len(sql_results)} 件ヒット（自己投稿除外済み）")
 
     response_cards = []
 
-    # --- Python側での詳細解析・スコアリング ---
+    # --- Python側での詳細解析（経路方向チェック・スコアリング） ---
     for r, v_dist in sql_results:
-        # 距離の取得と変換
         current_dist = float(v_dist) if v_dist is not None else None
         
         route_info = db.query(modelDB.Route).filter(modelDB.Route.route_id == r.route_id).first()
         user_info = db.query(modelDB.User).filter(modelDB.User.user_id == r.recruiter_user_id).first()
         driver_info = db.query(modelDB.DriverProfile).filter(modelDB.DriverProfile.user_id == r.recruiter_user_id).first()
 
-        # 経路パース
+        # 経路データのパース
         try:
             path_points = json.loads(route_info.path_data) if route_info and route_info.path_data else []
         except:
@@ -208,30 +212,28 @@ async def search_recruitments(req: Req, request: Request, db: Session = Depends(
                 [float(route_info.arr_latitude), float(route_info.arr_longitude)]
             ]
 
-        # 経路の方向チェック
+        # 経路の進行方向チェック（逆走防止）
         is_order_ok = True
         if p_start[0] is not None and p_end[0] is not None:
             _, idx_start = get_min_distance_to_path(p_start, path_points)
             _, idx_end = get_min_distance_to_path(p_end, path_points)
+            # 乗車地点が降車地点より前にあること
             is_order_ok = (idx_start < idx_end)
 
         if not is_order_ok:
-            logger.info(f"Skip: {user_info.name if user_info else 'Unknown'} - 進行方向が一致しません。")
+            logger.info(f"Skip: {user_info.name if user_info else 'Unknown'} - 進行方向不一致")
             continue
 
         # マッチスコア計算 (0-100)
-        # コサイン距離が0に近いほどマッチ度は100に近づく
+        # コサイン距離(0〜2)を反転させてパーセント化
         if current_dist is not None:
             vector_match_score = max(0, min(100, (1 - current_dist) * 100))
         else:
             vector_match_score = 50
 
-        # 詳細ログ
+        # ドライバー情報の構築
         driver_name = user_info.name if user_info else "不明なユーザー"
-        dist_display = f"{current_dist:.4f}" if current_dist is not None else "N/A"
-        logger.info(f"[Match Check] Driver: {driver_name} | Distance: {dist_display} | Score: {int(vector_match_score)}")
-
-        # 表示用条件
+        
         current_car_jouken = []
         if driver_info:
             if driver_info.no_smoking: current_car_jouken.append(CarCondition(jouken_name="禁煙"))

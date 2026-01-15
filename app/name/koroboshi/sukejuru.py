@@ -1,17 +1,17 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
+from sqlalchemy import desc
 from typing import List
 from pydantic import BaseModel
 from datetime import datetime
 
-# 自作モジュール（パスはプロジェクト構成に合わせて調整してください）
+# 自作モジュール
 import modelDB
 from db_setting import SessionLocal
-from app.name.hieda.user import get_current_user  # テンプレートの指定通り
+from app.name.hieda.user import get_current_user
 
 router = APIRouter(prefix="/api/driver", tags=["driver_kanri"])
 
-# --- DBセッションの取得 ---
 def get_db():
     db = SessionLocal()
     try:
@@ -33,27 +33,22 @@ class ScheduleItem(BaseModel):
 class ScheduleListResponse(BaseModel):
     schedules: List[ScheduleItem]
 
-# --- メインAPI: 自分の募集一覧取得 ---
+# --- 自分の「募集中(status=0)」の募集一覧取得 ---
 @router.get("/schedules", response_model=ScheduleListResponse)
 async def get_my_schedules(request: Request, db: Session = Depends(get_db)):
     """
-    ログイン中の運転者の「予定中」の募集をDBから取得する
+    ダミー値を一切使わず、DBから取得した真実の募集データを返す
     """
-    # 1. クッキーからセッションIDを取得
+    # 1. ユーザー認証
     session_id = request.cookies.get("session_id")
-    if not session_id:
-        raise HTTPException(status_code=401, detail="Session not found")
-
-    # 2. セッションからユーザーIDを特定
     user_id_str = get_current_user(session_id=session_id, db=db)
     if user_id_str == "no":
-        raise HTTPException(status_code=401, detail="Invalid session")
+        raise HTTPException(status_code=401, detail="セッションが無効です")
     
-    # 文字列で返ってくるため int に変換（DBがInteger型の場合）
-    user_id = int(user_id_str)
+    my_id = int(user_id_str)
 
-    # 3. DBからデータを取得 (Recruitment と Route を Join)
-    # status: 0(予定中/募集中), type: 0(運転者からの募集) と仮定
+    # 2. DBクエリ
+    # RecruitmentとRouteを内部結合(JOIN)し、自分の募集かつstatus=0(募集/予定中)を抽出
     results = db.query(
         modelDB.Recruitment,
         modelDB.Route
@@ -61,23 +56,27 @@ async def get_my_schedules(request: Request, db: Session = Depends(get_db)):
         modelDB.Route, 
         modelDB.Recruitment.route_id == modelDB.Route.route_id
     ).filter(
-        modelDB.Recruitment.recruiter_user_id == user_id,
-        modelDB.Recruitment.status == 0
-    ).all()
+        modelDB.Recruitment.recruiter_user_id == my_id,
+        modelDB.Recruitment.status == 0,
+        modelDB.Recruitment.type == 0 # 運転者としての募集
+    ).order_by(desc(modelDB.Route.dep_time)).all()
 
-    # 4. フロントエンドが期待する形式に整形
     schedules_data = []
+
+    # 3. データの整形（ダミーを排除し、DBの値をそのままマッピング）
     for rec, route in results:
+        # Routeテーブルの値を直接参照
+        # ※.depname, .arrname は models.py の Route クラスで定義されているカラム名
         schedules_data.append(ScheduleItem(
             id=str(rec.recruitment_id),
-            # Routeテーブルの作成日がない場合は現在時刻やdep_timeで代用（ここでは仮に作成日を固定または計算）
-            createdAt=datetime.now().strftime('%Y-%m-%d'), 
-            depName=route.depname,
-            arrName=route.arrname,
+            # Routeテーブルのデータ作成日時がモデルにないため、出発日の日付を表示
+            createdAt=route.dep_time.strftime('%Y/%m/%d'), 
+            depName=route.depname if route.depname else "出発地未設定",
+            arrName=route.arrname if route.arrname else "目的地未設定",
             depTime=route.dep_time.strftime('%Y-%m-%d %H:%M'),
             fare=rec.fare,
             capacity=rec.capacity,
-            status="予定中"
+            status="募集中" # 内部ステータス 0 に基づく固定ラベル
         ))
 
     return ScheduleListResponse(schedules=schedules_data)
