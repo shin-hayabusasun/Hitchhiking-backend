@@ -137,8 +137,8 @@ app.include_router(Orders.router) # ★追加: ルーターを登録
 from app.name.goto import settings
 app.include_router(settings.router)
 
-from app.name.koroboshi import reviews
-app.include_router(reviews.router)
+#from app.name.koroboshi import reviews
+#app.include_router(reviews.router)
 
 
 
@@ -194,3 +194,5 @@ from app.name.koroboshi import Delyotei
 app.include_router(Delyotei.router)
 from app.name.goto import inquiry   # ★追加
 app.include_router(inquiry.router) # ★追加
+from app.name.koroboshi import reviws
+app.include_router(reviws.router)
