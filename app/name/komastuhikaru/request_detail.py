@@ -201,7 +201,7 @@ async def respond_to_request(
 
     try:
         # 1. ステータス変更
-        recruit.status = 2
+        recruit.status = 1
         
         # 2. Application作成 (chat_id=None)
         new_app = modelDB.Application(

@@ -93,105 +93,60 @@ async def get_my_drives(
     """
     マイドライブ一覧取得API
     """
-    # 1. セッションIDからユーザーIDを取得
+    # 1. 認証
     session_id = request.cookies.get("session_id")
-    if not session_id:
-        raise HTTPException(status_code=401, detail="Unauthorized")
-    
+    if not session_id: raise HTTPException(status_code=401, detail="Unauthorized")
     user_id_str = get_current_user(session_id=session_id, db=db)
-    if user_id_str == "no":
-        raise HTTPException(status_code=401, detail="Invalid session")
-    
+    if user_id_str == "no": raise HTTPException(status_code=401, detail="Invalid session")
     user_id = int(user_id_str)
 
-    # 2. データベースからドライブ情報を取得
-    # RecruitmentテーブルとRouteテーブルを結合
+    # 2. クエリ構築 (自分の「運転者としての募集」を取得)
     query = db.query(modelDB.Recruitment, modelDB.Route).\
         join(modelDB.Route, modelDB.Recruitment.route_id == modelDB.Route.route_id).\
-        filter(modelDB.Recruitment.recruiter_user_id == user_id)
+        filter(
+            modelDB.Recruitment.recruiter_user_id == user_id,
+            modelDB.Recruitment.type == 0  # ★重要: 運転者募集のみに絞る
+        )
 
-    # ステータスフィルタリング (必要であれば)
-    # DBのstatusはint型: 0:募集中, 1:募集終了(確定), 2:完了, 3:中止 と仮定
+    # 3. ステータスフィルタリング (修正・追加部分)
     if status:
         if status == 'recruiting':
             query = query.filter(modelDB.Recruitment.status == 0)
         elif status == 'matched':
             query = query.filter(modelDB.Recruitment.status == 1)
-        # ... 他のステータスも同様に
+        elif status == 'completed':
+            query = query.filter(modelDB.Recruitment.status == 2)
+        elif status == 'cancelled':
+            query = query.filter(modelDB.Recruitment.status == 3)
 
-    # 日時順（未来の日付が上）にソート
+    # 日時順（新しいものが上）
     drives_data = query.order_by(desc(modelDB.Route.dep_time)).all()
 
-    # response_list = []
-    # for recruitment, route in drives_data:
-    #     # 現在の同乗者数をカウント (Applicationテーブルから承認済みの人数を取得)
-    #     # status=1 (承認) の数をカウント
-    #     passenger_count = db.query(modelDB.Application).\
-    #         filter(
-    #             modelDB.Application.recruitment_id == recruitment.recruitment_id,
-    #             modelDB.Application.status == 1 
-    #         ).count()
-
-    #     # ステータスコードを文字列に変換
-    #     status_str = "recruiting"
-    #     if recruitment.status == 0: status_str = "recruiting"
-    #     elif recruitment.status == 1: status_str = "matched"
-    #     elif recruitment.status == 2: status_str = "completed"
-    #     elif recruitment.status == 3: status_str = "cancelled"
-
-    #     # Routeテーブルには経度緯度が入っているが、フロントエンドの表示用に地名が必要
-    #     # ここでは簡易的に緯度経度を返すか、別途逆ジオコーディングするか、
-    #     # あるいはpath_dataに地名が含まれているならそこから取得する。
-    #     # 今回は一旦 path_data に "東京駅" のような文字列が入っているか、
-    #     # または別途地名カラムが必要だが、モデル定義にはないので仮置き。
-    #     # ※本来は departure_name, destination_name カラムがRouteにあると良い
-        
-    #     # path_dataから無理やり地名を取り出すか、固定値を返す（要DB設計確認）
-    #     # 仮の実装: path_dataをそのまま使うか、"座標"として返す
-    #     departure_name = "出発地" # TODO: 座標から地名への変換ロジック
-    #     destination_name = "目的地" # TODO: 座標から地名への変換ロジック
-
-    #     response_list.append(DriveResponse(
-    #         id=recruitment.recruitment_id,
-    #         departure=departure_name, 
-    #         destination=destination_name,
-    #         departureTime=route.dep_time,
-    #         fee=recruitment.fare,
-    #         capacity=recruitment.capacity,
-    #         currentPassengers=passenger_count,
-    #         status=status_str
-    #     ))
-
     response_list = []
-    # ★修正: ループ内の処理を try-except で囲んでAPI全体が落ちるのを防ぐ
+    
     for recruitment, route in drives_data:
         try:
-            # 同乗者情報の取得
+            # 同乗者情報の取得 (承認済みの人だけ)
             approved_apps = db.query(modelDB.Application, modelDB.User).\
                 join(modelDB.User, modelDB.Application.applicant_user_id == modelDB.User.user_id).\
                 filter(
                     modelDB.Application.recruitment_id == recruitment.recruitment_id,
-                    modelDB.Application.status == 1,
-                    modelDB.Recruitment.type == 0  # <--- ★これを追加！(0:運転者募集)
+                    modelDB.Application.status == 1 # 承認済み
                 ).all()
 
             passenger_list = []
             for app, user in approved_apps:
                 passenger_list.append(PassengerInfo(
                     userId=user.user_id,
-                    name=user.name,
-                    passengerCount=1
+                    name=user.name
                 ))
 
-            # ステータス判定
+            # ステータス文字列変換 (フロントエンド用)
             status_str = "recruiting"
             if recruitment.status == 1: status_str = "matched"
             elif recruitment.status == 2: status_str = "completed"
             elif recruitment.status == 3: status_str = "cancelled"
 
-            # # ★修正: float()変換を削除し、値をそのまま関数へ渡す（関数内で安全に変換）
-            # departure_name = get_location_name(route.dep_latitude, route.dep_longitude)
-            # destination_name = get_location_name(route.arr_latitude, route.arr_longitude)
             departure_name = route.depname if route.depname else "出発地未設定"
             destination_name = route.arrname if route.arrname else "目的地未設定"
 
@@ -208,7 +163,6 @@ async def get_my_drives(
             ))
         except Exception as e:
             print(f"Error processing drive {recruitment.recruitment_id}: {e}")
-            # エラーが起きたデータはスキップするか、デフォルト値で追加するなどの対策が可能
             continue
 
     return DriveListResponse(drives=response_list)
