@@ -102,3 +102,79 @@ async def get_completion_drives(request: Request, db: Session = Depends(get_db))
         ))
 
     return ProgressResponse(drives=final_list)
+
+
+# --- ドライブ完了実行エンドポイント ---
+from fastapi import Request # 追加が必要
+
+# --- スキーマ定義 ---
+# (既存の DriverInfo, ProgressDriveItem, ProgressResponse はそのまま)
+
+class CompleteRequest(BaseModel):
+    driveId: int  # または str。DBの recruitment_id の型に合わせてください
+
+class CompleteResponse(BaseModel):
+    ok: bool
+    message: str
+
+@router.post("/complete", response_model=CompleteResponse)
+async def complete_drive(
+    req: CompleteRequest,
+    request: Request,  # セッション取得のために追加
+    db: Session = Depends(get_db)
+):
+    """
+    ドライブを完了状態(status=2)に更新
+    """
+    # 1. セッションから実行ユーザーのIDを取得
+    session_id = request.cookies.get("session_id")
+    user_id_str = get_current_user(session_id=session_id, db=db)
+    
+    if user_id_str == "no":
+        raise HTTPException(status_code=401, detail="セッションが無効です。再ログインしてください。")
+    
+    my_id = int(user_id_str)
+
+    # 2. 対象の募集を取得
+    # 条件：指定されたIDであること ＋ 自分がその募集の作成者(運転者)であること
+    recruitment = (
+        db.query(modelDB.Recruitment)
+        .filter(
+            modelDB.Recruitment.recruitment_id == req.driveId,
+            modelDB.Recruitment.recruiter_user_id == my_id
+        )
+        .first()
+    )
+
+    if not recruitment:
+        # 他人の募集を操作しようとした場合や存在しない場合は404
+        raise HTTPException(status_code=404, detail="対象のドライブが見つからないか、権限がありません。")
+
+    # 3. すでに完了している場合の二重処理防止
+    if recruitment.status == 2:
+        return CompleteResponse(
+            ok=True,
+            message="このドライブは既に完了しています。"
+        )
+
+    try:
+        # 4. ステータスを「運転完了(2)」に更新
+        recruitment.status = 2
+        
+        # 関連する申請(Application)のステータスも完了(2)にする必要がある場合
+        # db.query(modelDB.Application).filter(
+        #     modelDB.Application.recruitment_id == req.driveId,
+        #     modelDB.Application.status == 1 # 承認済み
+        # ).update({modelDB.Application.status: 2}, synchronize_session=False)
+
+        db.commit()
+
+    except Exception as e:
+        db.rollback()
+        print(f"Update Error: {e}")
+        raise HTTPException(status_code=500, detail="データベースの更新に失敗しました。")
+
+    return CompleteResponse(
+        ok=True,
+        message="ドライブを完了しました。お疲れ様でした！"
+    )
