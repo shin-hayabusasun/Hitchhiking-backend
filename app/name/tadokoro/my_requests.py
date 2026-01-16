@@ -82,6 +82,19 @@ async def cancel_request(id: int, request: Request, db: Session = Depends(get_db
     ).first()
 
     if not app: raise HTTPException(status_code=404)
-    db.delete(app)
-    db.commit()
-    return {"success": True}
+    
+    try:
+        # Application削除前に、関連するChatのapplication_idをNULLにする
+        db.query(modelDB.Chat).filter(
+            modelDB.Chat.application_id == id
+        ).update({modelDB.Chat.application_id: None}, synchronize_session=False)
+        
+        # Applicationを削除
+        db.delete(app)
+        db.commit()
+        return {"success": True}
+    
+    except Exception as e:
+        db.rollback()
+        logger.error(f"削除エラー: {e}")
+        raise HTTPException(status_code=500, detail="削除に失敗しました")

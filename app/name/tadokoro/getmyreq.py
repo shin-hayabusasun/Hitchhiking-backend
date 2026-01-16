@@ -116,24 +116,13 @@ async def cancel_request(application_id: int, request: Request, db: Session = De
         raise HTTPException(status_code=404, detail="リクエストが見つかりません")
 
     try:
-        # --- 循環参照を完全に断ち切る手順 ---
-
-        # 手順A: Chatテーブル側が持っている application_id を全て NULL にする
+        # Application削除前に、関連するChatのapplication_idをNULLにする
         db.query(modelDB.Chat).filter(
             modelDB.Chat.application_id == application_id
         ).update({modelDB.Chat.application_id: None}, synchronize_session=False)
-
-        # 手順B: 今から消そうとしている Application 自身が持っている chat_id も NULL にする
-        # これにより Application 側からの参照も消える
-        app.chat_id = None
         
-        # 一度 DB に反映（フラッシュ）させて制約を緩める
-        db.flush()
-
-        # 手順C: どこからも参照されなくなったので、削除を実行
+        # Applicationを削除
         db.delete(app)
-
-        # 全て確定
         db.commit()
 
     except Exception as e:

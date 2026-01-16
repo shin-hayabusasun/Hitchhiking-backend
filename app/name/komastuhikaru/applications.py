@@ -8,6 +8,7 @@ sys.path.append('..')
 from db_setting import SessionLocal
 import modelDB
 from app.name.hieda.user import get_current_user
+from app.name.tadokoro.notific import create_notification
 
 # ルーター定義
 router = APIRouter(prefix="/api/applications", tags=["applications"])
@@ -67,19 +68,21 @@ async def approve_application(request: Request, id: int = Path(..., title="Appli
         # 2. 申請ステータスを承認(1)に変更
         application.status = 1 
         
-        # チャットルームの作成 (まだ紐付いていない場合)
-        if application.chat_id is None:
+        # チャットルームの作成
+        # 既存のチャットがあるかチェック
+        existing_chat = db.query(modelDB.Chat).filter(
+            modelDB.Chat.application_id == application.application_id
+        ).first()
+        
+        if not existing_chat:
             new_chat = modelDB.Chat(
+                user_id=current_user_id,
                 message="マッチングが成立しました！チャットを開始してください。",
-                application_id=application.application_id 
+                application_id=application.application_id
             )
             db.add(new_chat)
-            db.flush() # ID発行
-            
-            application.chat_id = new_chat.chat_id
 
         # 3. 募集自体のステータスも「マッチ済み」にする
-        # ★修正: コメントアウトを解除し、ステータスを 1 (matched) に設定
         recruitment = db.query(modelDB.Recruitment).filter(
             modelDB.Recruitment.recruitment_id == application.recruitment_id
         ).first()
@@ -88,6 +91,14 @@ async def approve_application(request: Request, id: int = Path(..., title="Appli
             recruitment.status = 1  # 0:募集中 -> 1:マッチ済み
 
         db.commit()
+        
+        # 申請者に承認通知を送る
+        create_notification(
+            db=db,
+            user_id=application.applicant_user_id,
+            message="あなたの申請が承認されました！マッチングが成立しました。"
+        )
+        
         return ActionResponse(message="承認しました")
 
     except Exception as e:
@@ -129,5 +140,12 @@ async def reject_application(request: Request, id: int = Path(..., title="Applic
 
     application.status = 2  # 拒否
     db.commit()
+    
+    # 申請者に拒否通知を送る
+    create_notification(
+        db=db,
+        user_id=application.applicant_user_id,
+        message="申請が拒否されました。他の募集をご検討ください。"
+    )
     
     return ActionResponse(message="拒否しました")

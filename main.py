@@ -60,6 +60,10 @@ from app.name.tadokoro import create_drive # ← ファイル名と一致して�
 app.include_router(create_drive.router)     # ← router変数を読み込んでいるか
 from app.name.tadokoro import driverhensyu # ← ファイル名と一致しているか
 app.include_router(driverhensyu.router)  
+from app.name.tadokoro import chat
+app.include_router(chat.router)
+from app.name.tadokoro import notific
+app.include_router(notific.router)
 
 
 
