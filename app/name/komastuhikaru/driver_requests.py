@@ -178,7 +178,7 @@
 #             continue
 
 #     return ApplicationListResponse(requests=response_list)
-import logging # ★必須
+import logging
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 from sqlalchemy import cast, Numeric
@@ -193,7 +193,7 @@ from db_setting import SessionLocal
 import modelDB
 from app.name.hieda.user import get_current_user
 
-# ★ログ設定 (Uvicornのログ形式に合わせる)
+# --- ログの設定 (Uvicornのログ形式に合わせる) ---
 logger = logging.getLogger("uvicorn")
 
 router = APIRouter(prefix="/api/driver", tags=["driver"])
@@ -233,9 +233,8 @@ async def get_driver_requests(request: Request, status: str = "pending", db: Ses
     """
     申請一覧取得 (ドライバー向け)
     """
-    # ★目印ログ (これがログに出なければ、コードが更新されていません)
-    logger.info("🔰🔰🔰 申請一覧API (get_driver_requests) が呼ばれました 🔰🔰🔰")
-
+    logger.info("=== 申請一覧取得開始（ドライバーモード） ===")
+    
     # 1. 認証
     session_id = request.cookies.get("session_id")
     if not session_id: 
@@ -300,26 +299,26 @@ async def get_driver_requests(request: Request, status: str = "pending", db: Ses
     ).filter(
         # ★重要: 自分が作成した募集であること
         modelDB.Recruitment.recruiter_user_id == current_driver_id,
-        
         # ★重要: 運転者募集 (type=0)
         modelDB.Recruitment.type == 0,
-
         # ステータスと日時のフィルタ
         modelDB.Application.status == target_status,
         modelDB.Route.dep_time >= now 
     ).all()
 
-    logger.info(f"🔍 ヒットした申請数: {len(results)} 件")
-
+    logger.info(f"🔍 SQLフィルタリング完了: {len(results)} 件の申請を取得（recruiter={current_driver_id}, type=0, status={target_status}）")
+    
     # 4. 整形
     response_list = []
     for app, recruit, user, profile, route, v_dist in results:
-        logger.info(f"📋 データ詳細 -> 申請ID:{app.application_id}, 募集主ID:{recruit.recruiter_user_id}, 申請者:{user.name}")
-
-        # ID不一致チェック
+        logger.info(f"📋 申請詳細: app_id={app.application_id}, recruit_id={recruit.recruitment_id}, "
+                   f"募集者={recruit.recruiter_user_id}, 申請者={app.applicant_user_id} ({user.name}), "
+                   f"type={recruit.type}, status={app.status}")
+        
+        # ID不一致チェック（念のため）
         if recruit.recruiter_user_id != current_driver_id:
             logger.error(f"😱【異常】他人の募集データが混入！ Owner:{recruit.recruiter_user_id} != User:{current_driver_id}")
-
+            continue
         try:
             rating_val = float(profile.rating) if profile else 0.0
             review_count_val = profile.ride_count if profile else 0
@@ -347,7 +346,8 @@ async def get_driver_requests(request: Request, status: str = "pending", db: Ses
                 createdAt=created_at_str
             ))
         except Exception as e:
-            logger.error(f"⚠️ データ処理エラー: {e}")
+            logger.error(f"⚠️ 申請処理エラー (app_id={app.application_id}): {e}")
             continue
 
+    logger.info(f"✅ 最終レスポンス件数: {len(response_list)} 件")
     return ApplicationListResponse(requests=response_list)
