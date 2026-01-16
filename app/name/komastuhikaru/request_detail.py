@@ -43,6 +43,11 @@ class RequestData(BaseModel):
     id: int
     origin: str
     destination: str
+    # 同乗者の緯度経度
+    originLatitude: Optional[float] = None
+    originLongitude: Optional[float] = None
+    destinationLatitude: Optional[float] = None
+    destinationLongitude: Optional[float] = None
     date: str
     time: str
     budget: int
@@ -123,25 +128,20 @@ async def get_request_detail(
     # アンパック
     recruit, route, user, profile, v_dist = target
 
-    # 5. データ整形 & マッチングスコア計算
+    # 5. データ整形
     
-    # 距離(v_dist) を スコア(%) に変換
-    current_dist = float(v_dist) if v_dist is not None else None
-    
-    if current_dist is not None:
-        # 距離0(完全一致) -> 100%, 距離1(直角) -> 0%
-        match_score = int(max(0, min(100, (1 - current_dist) * 100)))
-    else:
-        match_score = 50 # ベクトルデータがない場合のデフォルト
-
-    # ログで確認 (これでサーバーログに数値が出ます)
-    logger.info(f"Detail ID:{recruit.recruitment_id} Dist:{current_dist} Score:{match_score}")
-
     # 地名
     origin_name = getattr(route, 'depname', '出発地不明')
     arr_name = getattr(route, 'arrname', '目的地不明')
 
-    # 年齢
+    # マッチングスコア計算
+    current_dist = float(v_dist) if v_dist is not None else None
+    if current_dist is not None:
+        match_score = int(max(0, min(100, (1 - current_dist) * 100)))
+    else:
+        match_score = 50
+
+    # 年齢計算
     age = 0
     if user.birth_date:
         today = datetime.today()
@@ -152,6 +152,11 @@ async def get_request_detail(
             id=recruit.recruitment_id,
             origin=origin_name,
             destination=arr_name,
+            # ★必須：同乗者の緯度経度
+            originLatitude=float(route.dep_latitude) if route and route.dep_latitude else None,
+            originLongitude=float(route.dep_longitude) if route and route.dep_longitude else None,
+            destinationLatitude=float(route.arr_latitude) if route and route.arr_latitude else None,
+            destinationLongitude=float(route.arr_longitude) if route and route.arr_longitude else None,
             date=route.dep_time.strftime('%Y-%m-%d'),
             time=route.dep_time.strftime('%H:%M'),
             budget=recruit.fare,
@@ -166,7 +171,7 @@ async def get_request_detail(
             gender=user.gender,
             rating=float(profile.rating) if profile else 0.0,
             reviewCount=int(profile.ride_count) if profile else 0,
-            profileImage="", 
+            profileImage="",
             bio=profile.bio if profile else ""
         ),
         matchingScore=match_score
