@@ -62,29 +62,31 @@ async def get_drive_detail(id: int, db: Session = Depends(get_db)):
 
 # ---------------------------------------------------------
 # 2. 運転者向けの「届いた申請一覧」を取得
+# ★このエンドポイントは app/name/komastuhikaru/driver_requests.py に移行しました
+# ★そちらには認証・フィルタが実装されています
 # ---------------------------------------------------------
-@router.get("/driver/requests")
-async def get_driver_requests(status: int = 0, db: Session = Depends(get_db)):
-    # 申請、ユーザー、ルート情報を結合して取得
-    results = db.query(
-        modelDB.Application,
-        modelDB.User,
-        modelDB.Route
-    ).join(modelDB.User, modelDB.Application.applicant_user_id == modelDB.User.user_id)\
-     .join(modelDB.Recruitment, modelDB.Application.recruitment_id == modelDB.Recruitment.recruitment_id)\
-     .join(modelDB.Route, modelDB.Recruitment.route_id == modelDB.Route.route_id)\
-     .filter(modelDB.Application.status == status).all()
+# @router.get("/driver/requests")
+# async def get_driver_requests(status: int = 0, db: Session = Depends(get_db)):
+#     # 申請、ユーザー、ルート情報を結合して取得
+#     results = db.query(
+#         modelDB.Application,
+#         modelDB.User,
+#         modelDB.Route
+#     ).join(modelDB.User, modelDB.Application.applicant_user_id == modelDB.User.user_id)\
+#      .join(modelDB.Recruitment, modelDB.Application.recruitment_id == modelDB.Recruitment.recruitment_id)\
+#      .join(modelDB.Route, modelDB.Recruitment.route_id == modelDB.Route.route_id)\
+#      .filter(modelDB.Application.status == status).all()
 
-    return {"requests": [
-        {
-            "id": app.application_id,
-            "passengerName": user.name,
-            "matchingRate": 95, # ロジック未実装のためダミー
-            "rating": 4.5,      # ロジック未実装のためダミー
-            "reviewCount": 10,  # ロジック未実装のためダミー
-            "departure": route.depname,
-            "destination": route.arrname,
-            "departureTime": route.dep_time.strftime("%m/%d %H:%M"),
-            "createdAt": app.application_id # IDをキーにしているため適宜調整
-        } for app, user, route in results
-    ]}
+#     return {"requests": [
+#         {
+#             "id": app.application_id,
+#             "passengerName": user.name,
+#             "matchingRate": 95, # ロジック未実装のためダミー
+#             "rating": 4.5,      # ロジック未実装のためダミー
+#             "reviewCount": 10,  # ロジック未実装のためダミー
+#             "departure": route.depname,
+#             "destination": route.arrname,
+#             "departureTime": route.dep_time.strftime("%m/%d %H:%M"),
+#             "createdAt": app.application_id # IDをキーにしているため適宜調整
+#         } for app, user, route in results
+#     ]}

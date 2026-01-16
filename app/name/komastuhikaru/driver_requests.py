@@ -6,15 +6,17 @@ from pydantic import BaseModel
 from typing import List
 from datetime import datetime
 import sys
-# import time  <-- 削除
-# import numpy as np <-- 削除
-# from geopy.geocoders import Nominatim <-- 削除
+import logging
 
 # パス設定
 sys.path.append('..')
 from db_setting import SessionLocal
 import modelDB
 from app.name.hieda.user import get_current_user
+
+# --- ログの設定 ---
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/driver", tags=["driver"])
 
@@ -57,6 +59,8 @@ async def get_driver_requests(request: Request, status: str = "pending", db: Ses
     """
     申請一覧取得 (pgvector対応版)
     """
+    logger.info("=== 申請一覧取得開始（ドライバーモード） ===")
+    
     # 1. 認証
     session_id = request.cookies.get("session_id")
     if not session_id:
@@ -67,6 +71,7 @@ async def get_driver_requests(request: Request, status: str = "pending", db: Ses
         raise HTTPException(status_code=401, detail="Invalid session")
     
     current_driver_id = int(res)
+    logger.info(f"セッション確認: session_id={session_id[:10]}..., current_driver_id={current_driver_id}")
 
     # 2. ドライバー自身のベクトル取得
     driver_profile = db.query(modelDB.DriverProfile).filter(
@@ -114,12 +119,18 @@ async def get_driver_requests(request: Request, status: str = "pending", db: Ses
         modelDB.Recruitment.route_id == modelDB.Route.route_id
     ).filter(
         modelDB.Recruitment.recruiter_user_id == current_driver_id,
+        modelDB.Recruitment.type == 0,  # ドライバー募集のみに絞る
         modelDB.Application.status == target_status
     ).all()
 
+    logger.info(f"SQLフィルタリング完了: {len(results)} 件の申請を取得（recruiter={current_driver_id}, type=0, status={target_status}）")
+    
     # 4. 整形
     response_list = []
     for app, recruit, user, profile, route, v_dist in results:
+        logger.info(f"申請詳細: app_id={app.application_id}, recruit_id={recruit.recruitment_id}, "
+                   f"募集者={recruit.recruiter_user_id}, 申請者={app.applicant_user_id}, "
+                   f"type={recruit.type}, status={app.status}")
         try:
             rating_val = float(profile.rating) if profile else 0.0
             review_count_val = profile.ride_count if profile else 0
@@ -150,7 +161,8 @@ async def get_driver_requests(request: Request, status: str = "pending", db: Ses
                 createdAt=created_at_str
             ))
         except Exception as e:
-            print(f"Error processing item: {e}")
+            logger.error(f"申請処理エラー (app_id={app.application_id}): {e}")
             continue
 
+    logger.info(f"最終レスポンス件数: {len(response_list)} 件")
     return ApplicationListResponse(requests=response_list)
