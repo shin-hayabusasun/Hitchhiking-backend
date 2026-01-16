@@ -12,6 +12,7 @@ sys.path.append('..')
 from db_setting import SessionLocal
 import modelDB
 from app.name.hieda.user import get_current_user
+from app.name.tadokoro.notific import create_notification
 
 # ログ設定
 logging.basicConfig(level=logging.INFO)
@@ -203,28 +204,37 @@ async def respond_to_request(
         # 1. ステータス変更
         recruit.status = 1
         
-        # 2. Application作成 (chat_id=None)
+        # 2. Application作成
         new_app = modelDB.Application(
             recruitment_id=recruit.recruitment_id,
             applicant_user_id=current_driver_id, 
-            status=1, # 承認済み
-            chat_id=None 
+            status=1  # 承認済み
         )
         db.add(new_app)
         db.flush()
         
         # 3. Chat作成
         new_chat = modelDB.Chat(
+            user_id=current_driver_id,
             message="マッチングが成立しました！よろしくお願いします。",
             application_id=new_app.application_id 
         )
         db.add(new_chat)
-        db.flush()
-
-        # 4. 紐付け
-        new_app.chat_id = new_chat.chat_id
         
         db.commit()
+        
+        # 4. 募集者に通知を送る
+        driver_user = db.query(modelDB.User).filter(
+            modelDB.User.user_id == current_driver_id
+        ).first()
+        driver_name = driver_user.name if driver_user else "ドライバー"
+        
+        create_notification(
+            db=db,
+            user_id=recruit.recruiter_user_id,
+            message=f"{driver_name}さんがあなたの募集に応答しました！マッチングが成立しました。"
+        )
+        
         return ResponseData(success=True)
 
     except Exception as e:

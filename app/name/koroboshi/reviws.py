@@ -9,6 +9,7 @@ from datetime import datetime
 import modelDB
 from db_setting import SessionLocal
 from app.name.hieda.user import get_current_user
+from app.name.tadokoro.notific import create_notification
 
 router = APIRouter(prefix="/api", tags=["reviews"])
 
@@ -99,6 +100,18 @@ async def post_review(req: ReviewRequest, request: Request, db: Session = Depend
             if hasattr(profile, 'drive_count'): profile.drive_count += 1
             if hasattr(profile, 'ride_count'): profile.ride_count += 1
 
+        # レビューを受けた相手に通知
+        reviewer_user = db.query(modelDB.User).filter(
+            modelDB.User.user_id == my_id
+        ).first()
+        reviewer_name = reviewer_user.name if reviewer_user else "ユーザー"
+        
+        create_notification(
+            db=db,
+            user_id=target_user_id,
+            message=f"{reviewer_name}さんからレビューが投稿されました（評価: {req.rating}）"
+        )
+
         # 7. 相互評価完了判定
         partner_review = db.query(modelDB.Review).filter(
             modelDB.Review.recruitment_id == req.recruitment_id,
@@ -118,11 +131,25 @@ async def post_review(req: ReviewRequest, request: Request, db: Session = Depend
                 
                 balance.point_balance += 1
                 
+                # ポイント加算通知を送る
+                create_notification(
+                    db=db,
+                    user_id=uid,
+                    message="相互レビューが完了しました！ポイント+1を獲得しました🎉"
+                )
+                
                 # B. 運転者への売上反映
                 if uid == driver_id:
                     # 報酬計算: $fare \times \frac{5}{6}$
                     reward = int(rec.fare * (5 / 6))
                     balance.sales_history += reward
+                    
+                    # 売上反映通知（運転者のみ）
+                    create_notification(
+                        db=db,
+                        user_id=uid,
+                        message=f"売上が反映されました！報酬: ¥{reward}"
+                    )
 
             # C. 募集ステータスを「3: 取引完了」に更新
             rec.status = 3

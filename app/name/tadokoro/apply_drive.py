@@ -11,6 +11,7 @@ from db_setting import SessionLocal
 import modelDB
 # 【重要】user.py から get_current_user をインポート
 from app.name.hieda.user import get_current_user
+from app.name.tadokoro.notific import create_notification
 
 router = APIRouter(prefix="/api/actions", tags=["DriveAction"])
 
@@ -58,31 +59,39 @@ async def apply_to_drive(apply_data: ApplyRequest, request: Request, db: Session
         if existing:
             return {"ok": False, "message": "すでにこのドライブに申請済みです。"}
 
-        # --- 取引データの作成 (両方 nullable=True なのでこの順序がスムーズ) ---
+        # --- 取引データの作成 ---
 
-        # 手順A: 先に Application を作成 (chat_id は一旦 None)
+        # Application を作成
         new_app = modelDB.Application(
             recruitment_id=apply_data.recruitment_id,
             applicant_user_id=current_user_id,
-            status=0,
-            chat_id=None
+            status=0
         )
         db.add(new_app)
         db.flush()  # new_app.application_id を確定させる
 
-        # 手順B: 確定した application_id を使って Chat を作成
+        # Chat を作成
         new_chat = modelDB.Chat(
+            user_id=current_user_id,
             message="申請が届きました！",
             application_id=new_app.application_id
         )
         db.add(new_chat)
-        db.flush()  # new_chat.chat_id を確定させる
-
-        # 手順C: Application 側の chat_id を本物に更新
-        new_app.chat_id = new_chat.chat_id
 
         # 全て正常ならコミット
         db.commit()
+        
+        # 募集者に通知を送る
+        applicant_user = db.query(modelDB.User).filter(
+            modelDB.User.user_id == current_user_id
+        ).first()
+        applicant_name = applicant_user.name if applicant_user else "ユーザー"
+        
+        create_notification(
+            db=db,
+            user_id=recruitment.recruiter_user_id,
+            message=f"{applicant_name}さんから申請が届きました"
+        )
         
         # 成功時に ID を返すと、フロントエンドでチャット画面へ遷移させやすくなります
         return {

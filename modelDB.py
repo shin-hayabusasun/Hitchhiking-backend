@@ -112,7 +112,6 @@ class Application(Base):
     recruitment_id = Column(Integer, ForeignKey("recruitments.recruitment_id"), nullable=False)
     applicant_user_id = Column(Integer, ForeignKey("users.user_id"), nullable=False)
     status = Column(Integer, nullable=False)  # 申請中, 承認, 否認
-    chat_id = Column(Integer, ForeignKey("chats.chat_id"), nullable=True)
 
 
 # チャットテーブル
@@ -120,8 +119,10 @@ class Chat(Base):
     __tablename__ = "chats"
 
     chat_id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.user_id"), nullable=False)
     message = Column(String, nullable=True)  # text型
     application_id = Column(Integer, ForeignKey("applications.application_id"), nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.now)
 
 
 # 決済情報テーブル

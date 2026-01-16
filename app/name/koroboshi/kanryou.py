@@ -7,6 +7,7 @@ from pydantic import BaseModel
 import modelDB
 from db_setting import SessionLocal
 from app.name.hieda.user import get_current_user
+from app.name.tadokoro.notific import create_notification
 
 # ★ これが足りなかったためにエラーになっていました
 router = APIRouter(prefix="/api/driver", tags=["completion"])
@@ -161,11 +162,19 @@ async def complete_drive(
         # 4. ステータスを「運転完了(2)」に更新
         recruitment.status = 2
         
-        # 関連する申請(Application)のステータスも完了(2)にする必要がある場合
-        # db.query(modelDB.Application).filter(
-        #     modelDB.Application.recruitment_id == req.driveId,
-        #     modelDB.Application.status == 1 # 承認済み
-        # ).update({modelDB.Application.status: 2}, synchronize_session=False)
+        # 関連する申請(Application)を取得して、相手に通知を送る
+        application = db.query(modelDB.Application).filter(
+            modelDB.Application.recruitment_id == req.driveId,
+            modelDB.Application.status == 1  # 承認済み
+        ).first()
+        
+        if application:
+            # 相手（同乗者）に通知を送る
+            create_notification(
+                db=db,
+                user_id=application.applicant_user_id,
+                message="ドライブが完了しました。レビューの投稿をお願いします。"
+            )
 
         db.commit()
 
