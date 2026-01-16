@@ -122,7 +122,8 @@ async def search_passengers(req: SearchRequest, request: Request, db: Session = 
         dist_col = modelDB.PassengerProfile.embedding.cosine_distance(driver_embedding).label("v_dist")
         query = db.query(modelDB.Recruitment, dist_col)
     else:
-        query = db.query(modelDB.Recruitment, cast(0, Numeric).label("v_dist"))
+        # ★修正ポイント1: ベクトルが無い場合は 0 ではなく None (Null) として扱う
+        query = db.query(modelDB.Recruitment, cast(None, Numeric).label("v_dist"))
 
     query = query.join(
         modelDB.Route, modelDB.Recruitment.route_id == modelDB.Route.route_id
@@ -132,19 +133,15 @@ async def search_passengers(req: SearchRequest, request: Request, db: Session = 
         modelDB.PassengerProfile, modelDB.User.user_id == modelDB.PassengerProfile.user_id
     )
 
-    # 5. Filtering (修正箇所)
+    # 5. Filtering
     
-    # 現在時刻を取得
+    # 現在時刻 (JST補正を入れるのが安全ですが、元のコードに準拠してdatetime.now()としています)
     now = datetime.now()
 
     query = query.filter(
         modelDB.Recruitment.type == 1,       # 同乗者募集
         modelDB.Recruitment.status == 0,     # 募集中
-        
-        # ★追加1: 過去の募集を除外 (現在時刻より未来のものだけ)
         modelDB.Route.dep_time > now,
-        
-        # ★追加2: 自分の募集を除外 (自分が作成した同乗者募集を表示しない)
         modelDB.Recruitment.recruiter_user_id != current_driver_id
     )
 
@@ -156,14 +153,12 @@ async def search_passengers(req: SearchRequest, request: Request, db: Session = 
     if f.seats > 0:
         query = query.filter(modelDB.Recruitment.capacity <= f.seats)
 
-    # 日付指定がある場合
+    # 日付指定
     if f.date:
         try:
             target_date = datetime.strptime(f.date, '%Y-%m-%d')
-            # 検索範囲 (UTC考慮して広めに)
             search_start = target_date - timedelta(hours=12)
             search_end = target_date + timedelta(days=1, hours=12)
-            
             query = query.filter(modelDB.Route.dep_time.between(search_start, search_end))
         except ValueError:
             pass
@@ -200,7 +195,7 @@ async def search_passengers(req: SearchRequest, request: Request, db: Session = 
                 [float(route_info.arr_latitude), float(route_info.arr_longitude)]
             ]
 
-        match_score = 50
+        match_score = 50 # デフォルト値
 
         # 経路チェック
         if p_start[0] is not None and p_end[0] is not None:
@@ -210,15 +205,20 @@ async def search_passengers(req: SearchRequest, request: Request, db: Session = 
             dist_val = math.sqrt(dist_start_sq) + math.sqrt(dist_end_sq)
             geo_score = 100 - (dist_val * 500)
 
-            # 順序チェック & 距離足切り
             if idx_start >= idx_end or geo_score < 0:
                 continue 
             
             match_score = int(max(0, min(100, geo_score)))
 
         else:
-            if v_dist is not None:
-                match_score = int(max(0, min(100, (1 - float(v_dist)) * 100)))
+            # ★修正ポイント2: ベクトル計算ロジックの統一
+            # v_distがNoneなら、スコアは50%とする
+            current_dist = float(v_dist) if v_dist is not None else None
+            
+            if current_dist is not None:
+                match_score = int(max(0, min(100, (1 - current_dist) * 100)))
+            else:
+                match_score = 50  # データなしの場合のデフォルト
 
         response_cards.append(PassengerSearchItem(
             id=str(r.recruitment_id),

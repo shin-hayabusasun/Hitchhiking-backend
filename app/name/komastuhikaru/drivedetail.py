@@ -147,9 +147,8 @@ async def get_drive_detail(
     drive_status = status_map.get(recruitment.status, 'unknown')
 
     # 住所変換 (API制限回避のため待機)
-    time.sleep(1.0)
-    dep_name = get_location_name(route.dep_latitude, route.dep_longitude)
-    des_name = get_location_name(route.arr_latitude, route.arr_longitude)
+    dep_name = route.depname if route.depname else "出発地未設定"
+    des_name = route.arrname if route.arrname else "目的地未設定"
 
     # レスポンス構築
     response_data = DriveDetailResponse(
