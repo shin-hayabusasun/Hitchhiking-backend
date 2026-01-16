@@ -196,3 +196,5 @@ from app.name.goto import inquiry   # ★追加
 app.include_router(inquiry.router) # ★追加
 from app.name.koroboshi import reviws
 app.include_router(reviws.router)
+from app.name.tadokoro import reviw
+app.include_router(reviw.router)

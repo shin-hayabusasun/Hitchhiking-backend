@@ -36,24 +36,14 @@ def format_item(app: modelDB.Application, recruitment: modelDB.Recruitment, rout
 
 @router.get("/my-requests")
 async def get_my_requests(request: Request, db: Session = Depends(get_db)):
-    # 1. セッションチェック
+    # 1. セッション・ユーザー取得（中略）
     session_id = request.cookies.get("session_id")
-    if not session_id:
-        raise HTTPException(status_code=401, detail="Session not found")
-    
     user_id = get_current_user(session_id=session_id, db=db)
     if user_id == "no":
-        raise HTTPException(status_code=401, detail="Invalid session")
-
-    # 文字列のuser_idを整数に変換（DB定義がIntegerの場合）
+        raise HTTPException(status_code=401)
     u_id = int(user_id)
 
-    # --- データの取得ロジック ---
-
-    # A. 自分が応募したケース (Application.applicant_user_id == u_id)
-    # B. 自分が募集を出して誰かが応募してきたケース (Recruitment.recruiter_user_id == u_id かつ Recruitment.type == 1)
-    
-    # 全ての関連する申請を取得
+    # データの取得
     my_applications = db.query(
         modelDB.Application, 
         modelDB.Recruitment, 
@@ -70,28 +60,35 @@ async def get_my_requests(request: Request, db: Session = Depends(get_db)):
     ).all()
 
     response_data = {
-        "requesting": [],
-        "approved": [],
-        "completed": []
+        "requesting": [],  # 申請中 (Pending)
+        "approved": [],    # 承認済み・進行中
+        "completed": [],   # 完了 (rec.status == 2)
+        "rejected": []     # 拒否 (app.status == 2) ★追加
     }
 
     for app, rec, route in my_applications:
-        # 相手（運転者）の情報を特定する
-        # 自分が応募者の場合：募集主が相手
-        # 自分が募集主の場合：応募者が相手
+        # 相手情報の取得
         other_party_id = rec.recruiter_user_id if app.applicant_user_id == u_id else app.applicant_user_id
-        
         other_user = db.query(modelDB.User).filter(modelDB.User.user_id == other_party_id).first()
         driver_prof = db.query(modelDB.DriverProfile).filter(modelDB.DriverProfile.user_id == other_party_id).first()
 
-        # ステータス判定（リクエストの要件に基づく）
-        # app.status -> 0: 申請中, 1: 承認, 2: 完了/評価
-        if app.status == 0:
-            response_data["requesting"].append(format_item(app, rec, route, other_user, driver_prof, "pending"))
+        # --- ステータス判定の修正 ---
+        
+        # 1. まずドライブ自体が完了しているか確認
+        if rec.status == 2:
+            response_data["completed"].append(format_item(app, rec, route, other_user, driver_prof, "completed"))
+        
+        # 2. 申請が拒否（否認）された場合
+        elif app.status == 2:
+            response_data["rejected"].append(format_item(app, rec, route, other_user, driver_prof, "no"))
+        
+        # 3. 申請が承認されている場合
         elif app.status == 1:
             response_data["approved"].append(format_item(app, rec, route, other_user, driver_prof, "approved"))
-        elif app.status == 2:
-            response_data["completed"].append(format_item(app, rec, route, other_user, driver_prof, "completed"))
+        
+        # 4. まだ申請中の場合
+        elif app.status == 0:
+            response_data["requesting"].append(format_item(app, rec, route, other_user, driver_prof, "pending"))
 
     return {
         "success": True,
