@@ -46,7 +46,7 @@ async def get_completion_drives(request: Request, db: Session = Depends(get_db))
 
     final_list = []
 
-    # --- パターンA: 自分が「運転者募集(Type:0)」のホストだった場合 ---
+    # --- パターンA: 自分が「運転者が同乗者募集(Type=0)」のホストだった場合 ---
     # 相手は「申請してきた同乗者(Applicant)」
     driver_host = db.query(
         modelDB.Recruitment, modelDB.Route, modelDB.User, modelDB.PassengerProfile
@@ -56,6 +56,7 @@ async def get_completion_drives(request: Request, db: Session = Depends(get_db))
      .join(modelDB.PassengerProfile, modelDB.User.user_id == modelDB.PassengerProfile.user_id)\
      .filter(
          modelDB.Recruitment.recruiter_user_id == my_id,
+         modelDB.Recruitment.type == 0,        # ★追加: 運転者が同乗者募集
          modelDB.Recruitment.status == 2,      # 完了済み
          modelDB.Application.status >= 1       # 承認(1)または完了(2)
      ).all()
@@ -74,7 +75,7 @@ async def get_completion_drives(request: Request, db: Session = Depends(get_db))
             )
         ))
 
-    # --- パターンB: 自分が「同乗者募集(Type:1)」に対しドライバーとして応募した場合 ---
+    # --- パターンB: 自分が「同乗者が運転者募集(Type=1)」に対しドライバーとして応募した場合 ---
     # 相手は「募集を出した同乗者(Recruiter)」
     driver_guest = db.query(
         modelDB.Recruitment, modelDB.Route, modelDB.User, modelDB.PassengerProfile
@@ -84,6 +85,7 @@ async def get_completion_drives(request: Request, db: Session = Depends(get_db))
      .join(modelDB.PassengerProfile, modelDB.User.user_id == modelDB.PassengerProfile.user_id)\
      .filter(
          modelDB.Application.applicant_user_id == my_id, # 自分が応募側
+         modelDB.Recruitment.type == 1,        # ★追加: 同乗者が運転者募集
          modelDB.Recruitment.status == 2,
          modelDB.Application.status >= 1
      ).all()
@@ -137,12 +139,13 @@ async def complete_drive(
     my_id = int(user_id_str)
 
     # 2. 対象の募集を取得
-    # 条件：指定されたIDであること ＋ 自分がその募集の作成者(運転者)であること
+    # 条件：指定されたIDであること ＋ 自分がその募集の作成者(運転者)であること ＋ type=0（運転者が同乗者募集）
     recruitment = (
         db.query(modelDB.Recruitment)
         .filter(
             modelDB.Recruitment.recruitment_id == req.driveId,
-            modelDB.Recruitment.recruiter_user_id == my_id
+            modelDB.Recruitment.recruiter_user_id == my_id,
+            modelDB.Recruitment.type == 0  # ★追加: 運転者が同乗者募集のみ
         )
         .first()
     )
@@ -163,13 +166,13 @@ async def complete_drive(
         recruitment.status = 2
         
         # 関連する申請(Application)を取得して、相手に通知を送る
-        application = db.query(modelDB.Application).filter(
+        applications = db.query(modelDB.Application).filter(
             modelDB.Application.recruitment_id == req.driveId,
             modelDB.Application.status == 1  # 承認済み
-        ).first()
+        ).all()
         
-        if application:
-            # 相手（同乗者）に通知を送る
+        # 承認済みの全ての同乗者に通知を送る
+        for application in applications:
             create_notification(
                 db=db,
                 user_id=application.applicant_user_id,

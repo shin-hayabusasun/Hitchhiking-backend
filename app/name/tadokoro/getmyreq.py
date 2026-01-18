@@ -44,6 +44,8 @@ async def get_my_requests(request: Request, db: Session = Depends(get_db)):
     u_id = int(user_id)
 
     # データの取得
+    # ★パターン1: 自分が申請者（同乗者として申請）の場合
+    # ★パターン2: 自分が募集者（同乗者として運転者募集）の場合
     my_applications = db.query(
         modelDB.Application, 
         modelDB.Recruitment, 
@@ -54,8 +56,10 @@ async def get_my_requests(request: Request, db: Session = Depends(get_db)):
         modelDB.Route, modelDB.Recruitment.route_id == modelDB.Route.route_id
     ).filter(
         or_(
-            modelDB.Application.applicant_user_id == u_id,
-            modelDB.Recruitment.recruiter_user_id == u_id
+            # パターン1: 自分が申請者 AND type=0（運転者が同乗者募集、自分が同乗者として申請）
+            (modelDB.Application.applicant_user_id == u_id) & (modelDB.Recruitment.type == 0),
+            # パターン2: 自分が募集者 AND type=1（自分が同乗者として運転者募集、運転者が申請）
+            (modelDB.Recruitment.recruiter_user_id == u_id) & (modelDB.Recruitment.type == 1)
         )
     ).all()
 
@@ -67,27 +71,39 @@ async def get_my_requests(request: Request, db: Session = Depends(get_db)):
     }
 
     for app, rec, route in my_applications:
+        # パターン判定
+        # パターン1: 自分が申請者 AND type=0（同乗者として申請）
+        is_pattern1 = (app.applicant_user_id == u_id) and (rec.type == 0)
+        # パターン2: 自分が募集者 AND type=1（同乗者として運転者募集）
+        is_pattern2 = (rec.recruiter_user_id == u_id) and (rec.type == 1)
+        
         # 相手情報の取得
-        other_party_id = rec.recruiter_user_id if app.applicant_user_id == u_id else app.applicant_user_id
+        if is_pattern1:
+            # パターン1: 相手は募集者（運転者）
+            other_party_id = rec.recruiter_user_id
+        else:
+            # パターン2: 相手は申請者（運転者）
+            other_party_id = app.applicant_user_id
+        
         other_user = db.query(modelDB.User).filter(modelDB.User.user_id == other_party_id).first()
         driver_prof = db.query(modelDB.DriverProfile).filter(modelDB.DriverProfile.user_id == other_party_id).first()
 
-        # --- ステータス判定の修正 ---
+        # --- ステータス判定 ---
         
-        # 1. まずドライブ自体が完了しているか確認
+        # 1. ドライブ完了（両パターン表示）
         if rec.status == 2:
             response_data["completed"].append(format_item(app, rec, route, other_user, driver_prof, "completed"))
         
-        # 2. 申請が拒否（否認）された場合
-        elif app.status == 2:
+        # 2. 申請が拒否（パターン1のみ）
+        elif app.status == 2 and is_pattern1:
             response_data["rejected"].append(format_item(app, rec, route, other_user, driver_prof, "no"))
         
-        # 3. 申請が承認されている場合
+        # 3. 申請が承認済み（両パターン表示）
         elif app.status == 1:
             response_data["approved"].append(format_item(app, rec, route, other_user, driver_prof, "approved"))
         
-        # 4. まだ申請中の場合
-        elif app.status == 0:
+        # 4. 申請中（パターン1のみ）
+        elif app.status == 0 and is_pattern1:
             response_data["requesting"].append(format_item(app, rec, route, other_user, driver_prof, "pending"))
 
     return {

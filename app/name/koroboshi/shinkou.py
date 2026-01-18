@@ -18,6 +18,7 @@ class DriverInfo(BaseModel):
 
 class ProgressDriveItem(BaseModel):
     id: str
+    application_id: int  # 申請ID（取引ID）
     from_loc: str
     to_loc: str
     datetime: str
@@ -44,7 +45,7 @@ async def get_progress_drives(request: Request, db: Session = Depends(get_db)):
     response_list = []
 
     # パターンA: 自分が「運転者（募集者）」の場合
-    # Recruitment.status=1(募集終了) かつ Application.status=1(承認済) の同乗者情報を取得
+    # 運転者が同乗者募集(type=0)を作成 → 同乗者が申請・承認済み
     driver_side = db.query(
         modelDB.Recruitment,
         modelDB.Route,
@@ -57,6 +58,7 @@ async def get_progress_drives(request: Request, db: Session = Depends(get_db)):
      .join(modelDB.PassengerProfile, modelDB.User.user_id == modelDB.PassengerProfile.user_id)\
      .filter(
          modelDB.Recruitment.recruiter_user_id == my_id,
+         modelDB.Recruitment.type == 0,    # ★追加: 運転者が同乗者募集
          modelDB.Recruitment.status == 1,  # 募集終了/進行中
          modelDB.Application.status == 1   # 承認済み
      ).all()
@@ -64,19 +66,20 @@ async def get_progress_drives(request: Request, db: Session = Depends(get_db)):
     for rec, route, app, user, prof in driver_side:
         response_list.append(ProgressDriveItem(
             id=str(rec.recruitment_id),
+            application_id=app.application_id,
             from_loc=route.depname,
             to_loc=route.arrname,
             datetime=route.dep_time.strftime('%Y-%m-%d %H:%M'),
             price=rec.fare,
             driver=DriverInfo(
-                name=user.name, # 同乗者の名前
+                name=user.name, # パターンA: 同乗者の名前
                 rating=float(prof.rating),
                 driveCount=prof.ride_count
             )
         ))
 
-    # パターンB: 自分が「同乗者（申請者）」の場合
-    # Application.applicant_user_id=自分のID かつ Application.status=1(承認済) の運転者情報を取得
+    # パターンB: 自分が「運転者（申請者）」の場合
+    # 同乗者が運転者募集(type=1)を作成 → 自分が運転者として申請・承認済み
     passenger_side = db.query(
         modelDB.Application,
         modelDB.Recruitment,
@@ -89,6 +92,7 @@ async def get_progress_drives(request: Request, db: Session = Depends(get_db)):
      .join(modelDB.PassengerProfile, modelDB.User.user_id == modelDB.PassengerProfile.user_id)\
      .filter(
          modelDB.Application.applicant_user_id == my_id,
+         modelDB.Recruitment.type == 1,    # ★追加: 同乗者が運転者募集
          modelDB.Application.status == 1,
          modelDB.Recruitment.status == 1
      ).all()
@@ -96,14 +100,15 @@ async def get_progress_drives(request: Request, db: Session = Depends(get_db)):
     for app, rec, route, user, prof in passenger_side:
         response_list.append(ProgressDriveItem(
             id=str(rec.recruitment_id),
+            application_id=app.application_id,
             from_loc=route.depname,
             to_loc=route.arrname,
             datetime=route.dep_time.strftime('%Y-%m-%d %H:%M'),
             price=rec.fare,
             driver=DriverInfo(
-                name=user.name, # 運転者の名前
+                name=user.name, # パターンB: 同乗者（募集者）の名前
                 rating=float(prof.rating),
-                driveCount=prof.ride_count # 本来は運転回数
+                driveCount=prof.ride_count
             )
         ))
 
