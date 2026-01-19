@@ -131,10 +131,10 @@ async def login(
     response.set_cookie(
         key="session_id",
         value=session_id, 
-        httponly=True,   # JSから盗まれないようにする
-        samesite="lax",  # CSRF対策
-        max_age=3600 * 24, # 1日有効
-        secure=False,    # 開発中はFalse、本番(HTTPS)はTrue
+        httponly=True,   
+        samesite="none",  # ★ クロスサイトでもCookieを送信
+        max_age=3600 * 24,
+        secure=False,    # ★ 開発環境用（本番ではTrueにする）
     )
 
     

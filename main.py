@@ -17,7 +17,9 @@ app = FastAPI(
 # CORS設定
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],  # 本番環境では適切に設定
+    allow_origins=["http://localhost:3000",          # フロントエンド（開発環境）
+        "http://44.193.209.110:8000",    # バックエンド（AWS本番環境）
+        "http://44.193.209.110",  ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

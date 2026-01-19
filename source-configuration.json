@@ -1,0 +1,10 @@
+{
+  "ImageRepository": {
+    "ImageIdentifier": "095622453902.dkr.ecr.us-east-1.amazonaws.com/fastapi-repo:latest",
+    "ImageRepositoryType": "ECR",
+    "ImageConfiguration": {
+      "Port": "8000"
+    }
+  },
+  "AutoDeploymentsEnabled": false
+}
