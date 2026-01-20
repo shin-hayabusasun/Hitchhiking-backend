@@ -127,14 +127,14 @@ async def login(
     session_id = create_session(db, user_in_db.user_id)
     
     # 3. ★ クッキーをセット（これが credentials: 'include' で送受信される）
-    # ここでは例としてユーザーIDを入れていますが、実際はJWTなどを生成して入れます
+    # HTTP環境では SameSite=lax を使用（同一サイト内のリクエストで動作）
     response.set_cookie(
         key="session_id",
         value=session_id, 
         httponly=True,   
-        samesite="none",  # ★ クロスサイトでもCookieを送信
+        samesite="lax",   # ★ 同一サイト内のリクエストで動作
         max_age=3600 * 24,
-        secure=False,    # ★ 開発環境用（本番ではTrueにする）
+        secure=True,     # ★ HTTP環境
     )
 
     
