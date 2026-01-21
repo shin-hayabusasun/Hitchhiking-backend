@@ -24,27 +24,68 @@ def get_db():
         db.close()
 
 def get_coordinates(address: str):
-    geocoder = Nominatim(user_agent="drive_app_v2026", timeout=10)
-    try:
-        location = geocoder.geocode(f"{address}, Japan")
-        if location:
-            return location.latitude, location.longitude
-    except:
+    """LocationIQ APIを使用して座標を取得"""
+    import logging
+    import time
+    import os
+    
+    logger = logging.getLogger(__name__)
+    
+    if not address or not address.strip():
         return None, None
+    
+    api_key = os.getenv("LOCATIONIQ_API_KEY", "pk.4c89f676c0053659bd58a6708715b00e")
+    
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            url = "https://us1.locationiq.com/v1/search.php"
+            params = {
+                "key": api_key,
+                "q": f"{address}, Japan",
+                "format": "json",
+                "limit": 1
+            }
+            
+            response = requests.get(url, params=params, timeout=30)
+            response.raise_for_status()
+            data = response.json()
+            
+            if data and len(data) > 0:
+                return float(data[0]['lat']), float(data[0]['lon'])
+                
+        except Exception as e:
+            logger.error(f"Geocoding error: {str(e)}")
+            if attempt < max_retries - 1:
+                time.sleep(2)
+    
     return None, None
 
 def get_actual_route(start_lat, start_lon, end_lat, end_lon):
-    try:
-        url = f"http://router.project-osrm.org/route/v1/driving/{start_lon},{start_lat};{end_lon},{end_lat}?overview=full&geometries=geojson"
-        response = requests.get(url, timeout=5)
-        data = response.json()
-        if data.get('code') == 'Ok':
-            coords = data['routes'][0]['geometry']['coordinates']
-            path_points = [[c[1], c[0]] for c in coords]
-            duration = data['routes'][0]['duration']
-            return path_points, duration
-    except:
-        pass
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            url = f"https://router.project-osrm.org/route/v1/driving/{start_lon},{start_lat};{end_lon},{end_lat}?overview=full&geometries=geojson"
+            response = requests.get(url, timeout=30)
+            response.raise_for_status()
+            data = response.json()
+            
+            if data.get('code') == 'Ok':
+                coords = data['routes'][0]['geometry']['coordinates']
+                path_points = [[c[1], c[0]] for c in coords]
+                duration = data['routes'][0]['duration']
+                logger.info(f"OSRM route success: {len(path_points)} points, {duration}s")
+                return path_points, duration
+        except Exception as e:
+            logger.error(f"OSRM error (attempt {attempt + 1}/{max_retries}): {str(e)}")
+            if attempt < max_retries - 1:
+                import time
+                time.sleep(2)
+    
+    logger.warning(f"OSRM failed, using fallback route")
     return [[start_lat, start_lon], [end_lat, end_lon]], 10800
 
 # スキーマ

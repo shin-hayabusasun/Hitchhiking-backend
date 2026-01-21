@@ -26,19 +26,40 @@ def get_db():
         db.close()
 
 def get_location_name(lat, lon) -> str:
-    if lat is None or lon is None: return "場所情報なし"
+    """LocationIQ APIを使用して逆ジオコーディング（座標→住所）"""
+    import requests
+    import os
+    
+    if lat is None or lon is None:
+        return "場所情報なし"
+    
+    api_key = os.getenv("LOCATIONIQ_API_KEY", "pk.4c89f676c0053659bd58a6708715b00e")
+    
     try:
-        geolocator = Nominatim(user_agent="drive_app_detail_v1", timeout=3)
-        location = geolocator.reverse((float(lat), float(lon)), language='ja')
-        if location:
-            addr = location.raw.get('address', {})
+        url = "https://us1.locationiq.com/v1/reverse.php"
+        params = {
+            "key": api_key,
+            "lat": lat,
+            "lon": lon,
+            "format": "json",
+            "accept-language": "ja"
+        }
+        
+        response = requests.get(url, params=params, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+        
+        if data and 'address' in data:
+            addr = data['address']
             city = addr.get('city', addr.get('town', addr.get('village', '')))
             road = addr.get('road', '')
             state = addr.get('province', addr.get('state', ''))
-            if city and road: return f"{city} {road}"
+            if city and road:
+                return f"{city} {road}"
             return state + city
     except Exception:
         pass
+    
     return f"地点({lat}, {lon})"
 
 # ---------------------------------------------------------

@@ -69,15 +69,38 @@ class SearchRequest(BaseModel):
 
 # --- Helpers ---
 def get_coordinates(address: str):
+    """LocationIQ APIを使用して座標を取得"""
+    import requests
+    import time
+    import os
+    
     if not address or not address.strip():
         return None, None
-    geocoder = Nominatim(user_agent="driver_search_final_v2", timeout=5)
-    try:
-        location = geocoder.geocode(f"{address}, Japan")
-        if location:
-            return location.latitude, location.longitude
-    except:
-        pass
+    
+    api_key = os.getenv("LOCATIONIQ_API_KEY", "pk.4c89f676c0053659bd58a6708715b00e")
+    
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            url = "https://us1.locationiq.com/v1/search.php"
+            params = {
+                "key": api_key,
+                "q": f"{address}, Japan",
+                "format": "json",
+                "limit": 1
+            }
+            
+            response = requests.get(url, params=params, timeout=30)
+            response.raise_for_status()
+            data = response.json()
+            
+            if data and len(data) > 0:
+                return float(data[0]['lat']), float(data[0]['lon'])
+                
+        except:
+            if attempt < max_retries - 1:
+                time.sleep(2)
+    
     return None, None
 
 def get_min_distance_to_path(point_p, path_points):

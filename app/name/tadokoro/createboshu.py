@@ -27,33 +27,87 @@ def get_db():
         db.close()
 
 def get_coordinates(address: str):
-    """地名から座標を取得（Nominatim使用）"""
-    geocoder = Nominatim(user_agent="hitchhiker_app_v2026", timeout=10)
-    try:
-        # 日本国内を優先的に検索
-        location = geocoder.geocode(f"{address}, Japan")
-        if location:
-            return location.latitude, location.longitude
-    except:
+    """LocationIQ APIを使用して座標を取得"""
+    import requests
+    import logging
+    import time
+    import os
+    
+    logger = logging.getLogger(__name__)
+    
+    if not address or not address.strip():
+        logger.warning(f"Empty address provided")
         return None, None
+    
+    # 環境変数からAPIキーを取得
+    api_key = os.getenv("LOCATIONIQ_API_KEY", "pk.4c89f676c0053659bd58a6708715b00e")
+    
+    # リトライ設定
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            url = "https://us1.locationiq.com/v1/search.php"
+            params = {
+                "key": api_key,
+                "q": f"{address}, Japan",
+                "format": "json",
+                "limit": 1
+            }
+            
+            logger.info(f"Geocoding request: {address}")
+            response = requests.get(url, params=params, timeout=30)
+            response.raise_for_status()
+            data = response.json()
+            
+            if data and len(data) > 0:
+                lat = float(data[0]['lat'])
+                lon = float(data[0]['lon'])
+                logger.info(f"Geocoding success: {address} -> ({lat}, {lon})")
+                return lat, lon
+            else:
+                logger.warning(f"Geocoding returned no results for: {address}")
+                return None, None
+                
+        except Exception as e:
+            logger.error(f"Geocoding error (attempt {attempt + 1}/{max_retries}) for '{address}': {str(e)}")
+            if attempt < max_retries - 1:
+                time.sleep(2)  # リトライ前に2秒待機
+            else:
+                return None, None
+    
     return None, None
 
 def get_actual_route(start_lat, start_lon, end_lat, end_lon):
     """OSRM APIを使用して実際の道路に沿った経路と所要時間を取得"""
-    try:
-        url = f"http://router.project-osrm.org/route/v1/driving/{start_lon},{start_lat};{end_lon},{end_lat}?overview=full&geometries=geojson"
-        response = requests.get(url, timeout=5)
-        data = response.json()
-        
-        if data.get('code') == 'Ok':
-            coords = data['routes'][0]['geometry']['coordinates']
-            path_points = [[c[1], c[0]] for c in coords]
-            duration = data['routes'][0]['duration']  # 秒
-            return path_points, duration
-    except Exception as e:
-        print(f"経路探索エラー: {e}")
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    # リトライ設定
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            url = f"https://router.project-osrm.org/route/v1/driving/{start_lon},{start_lat};{end_lon},{end_lat}?overview=full&geometries=geojson"
+            logger.info(f"Requesting OSRM route: {url}")
+            response = requests.get(url, timeout=30)  # タイムアウトを30秒に延長
+            response.raise_for_status()  # HTTPエラーをチェック
+            data = response.json()
+            
+            if data.get('code') == 'Ok':
+                coords = data['routes'][0]['geometry']['coordinates']
+                path_points = [[c[1], c[0]] for c in coords]
+                duration = data['routes'][0]['duration']  # 秒
+                logger.info(f"OSRM route success: {len(path_points)} points, {duration}s")
+                return path_points, duration
+            else:
+                logger.warning(f"OSRM returned non-Ok code: {data.get('code')}")
+        except Exception as e:
+            logger.error(f"OSRM error (attempt {attempt + 1}/{max_retries}): {str(e)}")
+            if attempt < max_retries - 1:
+                import time
+                time.sleep(2)  # リトライ前に2秒待機
     
     # 失敗時は直線距離を想定（デフォルト3時間）
+    logger.warning(f"OSRM failed, using fallback route")
     return [[start_lat, start_lon], [end_lat, end_lon]], 10800
 
 # --- スキーマ定義 ---

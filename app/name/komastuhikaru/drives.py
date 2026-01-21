@@ -43,26 +43,37 @@ def get_db():
         
 # ★修正: 住所変換関数
 def get_location_name(lat, lon) -> str:
+    """LocationIQ APIを使用して逆ジオコーディング（座標→住所）"""
+    import requests
+    import os
+    
     # 1. 値の存在チェック
     if lat is None or lon is None:
         return "場所情報なし"
     
+    api_key = os.getenv("LOCATIONIQ_API_KEY", "pk.4c89f676c0053659bd58a6708715b00e")
+    
     try:
         # 2. 型変換 (Decimal -> float)
-        # SQLAlchemyのNumeric型はPythonのDecimalになるため、必ずfloatにする
         lat_f = float(lat)
         lon_f = float(lon)
         
-        # 3. Geocoderの初期化 (user_agentは必ずユニークなものを指定)
-        geolocator = Nominatim(user_agent="my_ride_share_app_v1_0", timeout=5)
+        # 3. LocationIQ API呼び出し
+        url = "https://us1.locationiq.com/v1/reverse.php"
+        params = {
+            "key": api_key,
+            "lat": lat_f,
+            "lon": lon_f,
+            "format": "json",
+            "accept-language": "ja"
+        }
         
-        # 4. API実行
-        # language='ja' で日本語を指定
-        location = geolocator.reverse((lat_f, lon_f), language='ja')
+        response = requests.get(url, params=params, timeout=10)
+        response.raise_for_status()
+        data = response.json()
         
-        if location:
-            # 住所情報の抽出ロジック
-            addr = location.raw.get('address', {})
+        if data and 'address' in data:
+            addr = data['address']
             
             # 都道府県、市町村、町名などを結合
             state = addr.get('province', addr.get('state', ''))
@@ -75,12 +86,12 @@ def get_location_name(lat, lon) -> str:
                 return f"{city} {road}"
             if city and suburb:
                 return f"{city} {suburb}"
-            return location.address.split(',')[0] # フォールバック: 先頭の部分だけ返す
+            if 'display_name' in data:
+                return data['display_name'].split(',')[0]
 
     except Exception as e:
         # エラー詳細をコンソールに出す（デバッグ用）
         print(f"GeoError: {e} (Lat:{lat}, Lon:{lon})")
-        pass
     
     # 失敗時は座標を返す
     return f"地点({lat}, {lon})"

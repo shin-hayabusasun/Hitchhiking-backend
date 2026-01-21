@@ -37,15 +37,42 @@ class CreateRecruitmentRequest(BaseModel):
 # --- ヘルパー関数 ---
 
 def get_coordinates(address: str):
-    """地名から座標を取得（Nominatim使用）"""
-    geocoder = Nominatim(user_agent="hitchhiker_app_v2026", timeout=10)
-    try:
-        # 検索精度向上のため ", Japan" を付与
-        location = geocoder.geocode(f"{address}, Japan")
-        if location:
-            return location.latitude, location.longitude
-    except:
+    """LocationIQ APIを使用して座標を取得"""
+    import requests
+    import logging
+    import time
+    import os
+    
+    logger = logging.getLogger(__name__)
+    
+    if not address or not address.strip():
         return None, None
+    
+    api_key = os.getenv("LOCATIONIQ_API_KEY", "pk.4c89f676c0053659bd58a6708715b00e")
+    
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            url = "https://us1.locationiq.com/v1/search.php"
+            params = {
+                "key": api_key,
+                "q": f"{address}, Japan",
+                "format": "json",
+                "limit": 1
+            }
+            
+            response = requests.get(url, params=params, timeout=30)
+            response.raise_for_status()
+            data = response.json()
+            
+            if data and len(data) > 0:
+                return float(data[0]['lat']), float(data[0]['lon'])
+                
+        except Exception as e:
+            logger.error(f"Geocoding error: {str(e)}")
+            if attempt < max_retries - 1:
+                time.sleep(2)
+    
     return None, None
 
 def get_actual_route(start_lat, start_lon, end_lat, end_lon):
