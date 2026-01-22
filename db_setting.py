@@ -13,8 +13,14 @@ SQLALCHEMY_DATABASE_URL = os.getenv(
     "postgresql://postgres:shunya@localhost:5432/testdb"
 )
 
-# エンジン作成
-engine = create_engine(SQLALCHEMY_DATABASE_URL)
+# エンジン作成（接続プール設定を追加）
+engine = create_engine(
+    SQLALCHEMY_DATABASE_URL,
+    pool_size=5,        # 常に保持する接続数
+    max_overflow=10,    # 必要に応じて追加できる接続数
+    pool_pre_ping=True, # 接続の健全性チェック
+    pool_recycle=3600   # 1時間後に接続をリサイクル
+)
 
 @event.listens_for(engine, "connect")
 def connect(dbapi_connection, connection_record):

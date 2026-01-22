@@ -2,12 +2,13 @@ import sys
 import os
 import json
 import requests
+import httpx
+import asyncio
 from datetime import datetime, timedelta
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
-from geopy.geocoders import Nominatim
 
 # パス設定
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../..')))
@@ -24,11 +25,10 @@ def get_db():
     finally:
         db.close()
 
-def get_coordinates(address: str):
-    """LocationIQ APIを使用して座標を取得"""
-    import requests
+async def get_coordinates(address: str):
+    """LocationIQ APIを使用して座標を取得（非同期版）"""
     import logging
-    import time
+    import asyncio
     import os
     
     logger = logging.getLogger(__name__)
@@ -39,43 +39,46 @@ def get_coordinates(address: str):
     api_key = os.getenv("LOCATIONIQ_API_KEY", "pk.4c89f676c0053659bd58a6708715b00e")
     
     max_retries = 3
-    for attempt in range(max_retries):
-        try:
-            url = "https://us1.locationiq.com/v1/search.php"
-            params = {
-                "key": api_key,
-                "q": f"{address}, Japan",
-                "format": "json",
-                "limit": 1
-            }
-            
-            response = requests.get(url, params=params, timeout=30)
-            response.raise_for_status()
-            data = response.json()
-            
-            if data and len(data) > 0:
-                return float(data[0]['lat']), float(data[0]['lon'])
+    async with httpx.AsyncClient() as client:
+        for attempt in range(max_retries):
+            try:
+                url = "https://us1.locationiq.com/v1/search.php"
+                params = {
+                    "key": api_key,
+                    "q": f"{address}, Japan",
+                    "format": "json",
+                    "limit": 1
+                }
                 
-        except Exception as e:
-            logger.error(f"Geocoding error: {str(e)}")
-            if attempt < max_retries - 1:
-                time.sleep(2)
+                response = await client.get(url, params=params, timeout=30.0)
+                response.raise_for_status()
+                data = response.json()
+                
+                if data and len(data) > 0:
+                    return float(data[0]['lat']), float(data[0]['lon'])
+                    
+            except Exception as e:
+                logger.error(f"Geocoding error: {str(e)}")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(2)
     
     return None, None
 
-def get_actual_route(start_lat, start_lon, end_lat, end_lon):
-    try:
-        url = f"http://router.project-osrm.org/route/v1/driving/{start_lon},{start_lat};{end_lon},{end_lat}?overview=full&geometries=geojson"
-        response = requests.get(url, timeout=5)
-        data = response.json()
-        if data.get('code') == 'Ok':
-            coords = data['routes'][0]['geometry']['coordinates']
-            path_points = [[c[1], c[0]] for c in coords]
-            duration = data['routes'][0]['duration']
-            return path_points, duration
-    except Exception as e:
-        print(f"経路探索エラー: {e}")
-    return [[start_lat, start_lon], [end_lat, end_lon]], 10800
+async def get_actual_route(start_lat, start_lon, end_lat, end_lon):
+    """OSRM APIを使用して実際の道路に沿った経路と所要時間を取得（非同期版）"""
+    async with httpx.AsyncClient() as client:
+        try:
+            url = f"https://router.project-osrm.org/route/v1/driving/{start_lon},{start_lat};{end_lon},{end_lat}?overview=full&geometries=geojson"
+            response = await client.get(url, timeout=30.0)
+            data = response.json()
+            if data.get('code') == 'Ok':
+                coords = data['routes'][0]['geometry']['coordinates']
+                path_points = [[c[1], c[0]] for c in coords]
+                duration = data['routes'][0]['duration']
+                return path_points, duration
+        except Exception as e:
+            print(f"経路探索エラー: {e}")
+        return [[start_lat, start_lon], [end_lat, end_lon]], 10800
 
 # --- スキーマ定義 ---
 class VehicleRules(BaseModel):
@@ -170,12 +173,19 @@ async def update_drive(drive_id: int, data: DriveUpdateData, request: Request, d
     if not rec:
         return CommonResponse(ok=False, detail="募集が見つかりません")
 
-    dep_lat, dep_lon = get_coordinates(data.departure)
-    arr_lat, arr_lon = get_coordinates(data.destination)
+    # 座標取得（並列実行）
+    dep_coords, arr_coords = await asyncio.gather(
+        get_coordinates(data.departure),
+        get_coordinates(data.destination)
+    )
+    dep_lat, dep_lon = dep_coords
+    arr_lat, arr_lon = arr_coords
+    
     if dep_lat is None or arr_lat is None:
         return CommonResponse(ok=False, detail="地点の特定に失敗しました")
 
-    path_points, duration_sec = get_actual_route(dep_lat, dep_lon, arr_lat, arr_lon)
+    # 経路計算
+    path_points, duration_sec = await get_actual_route(dep_lat, dep_lon, arr_lat, arr_lon)
 
     try:
         dep_dt = datetime.strptime(data.departureTime, "%Y-%m-%dT%H:%M")

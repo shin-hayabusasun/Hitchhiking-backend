@@ -3,18 +3,17 @@ services:
   web:
     build:
       context: .
-      dockerfile: Dockerfile  # 本番用Dockerfileを使用
-    # volumes:  # 本番環境ではvolume mountを削除（コードはイメージに含まれる）
-    #   - .:/app
+      dockerfile: Dockerfile.dev
+    volumes:
+      - .:/app
     ports:
       - "8000:8000"
     environment:
       - DATABASE_URL=postgresql://postgres:shunya@db:5432/testdb
-      - ENVIRONMENT=production
+      - ENVIRONMENT=development
       - LOCATIONIQ_API_KEY=pk.4c89f676c0053659bd58a6708715b00e
     depends_on:
       - db
-    restart: unless-stopped  # 自動再起動
 
   db:
     image: ankane/pgvector:v0.5.1

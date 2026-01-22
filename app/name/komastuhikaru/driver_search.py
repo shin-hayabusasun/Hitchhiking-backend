@@ -1,6 +1,8 @@
 import logging
 import json
 import math
+import httpx
+import asyncio
 from datetime import datetime, timedelta
 from typing import List, Optional
 
@@ -8,7 +10,6 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 from sqlalchemy import extract, cast, Date, Numeric, asc
 from pydantic import BaseModel
-from geopy.geocoders import Nominatim
 from pgvector.sqlalchemy import Vector
 
 import sys
@@ -68,10 +69,8 @@ class SearchRequest(BaseModel):
     filter: SearchFilters
 
 # --- Helpers ---
-def get_coordinates(address: str):
-    """LocationIQ APIを使用して座標を取得"""
-    import requests
-    import time
+async def get_coordinates(address: str):
+    """LocationIQ APIを使用して座標を取得（非同期版）"""
     import os
     
     if not address or not address.strip():
@@ -80,26 +79,27 @@ def get_coordinates(address: str):
     api_key = os.getenv("LOCATIONIQ_API_KEY", "pk.4c89f676c0053659bd58a6708715b00e")
     
     max_retries = 3
-    for attempt in range(max_retries):
-        try:
-            url = "https://us1.locationiq.com/v1/search.php"
-            params = {
-                "key": api_key,
-                "q": f"{address}, Japan",
-                "format": "json",
-                "limit": 1
-            }
-            
-            response = requests.get(url, params=params, timeout=30)
-            response.raise_for_status()
-            data = response.json()
-            
-            if data and len(data) > 0:
-                return float(data[0]['lat']), float(data[0]['lon'])
+    async with httpx.AsyncClient() as client:
+        for attempt in range(max_retries):
+            try:
+                url = "https://us1.locationiq.com/v1/search.php"
+                params = {
+                    "key": api_key,
+                    "q": f"{address}, Japan",
+                    "format": "json",
+                    "limit": 1
+                }
                 
-        except:
-            if attempt < max_retries - 1:
-                time.sleep(2)
+                response = await client.get(url, params=params, timeout=30.0)
+                response.raise_for_status()
+                data = response.json()
+                
+                if data and len(data) > 0:
+                    return float(data[0]['lat']), float(data[0]['lon'])
+                    
+            except:
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(2)
     
     return None, None
 
@@ -135,10 +135,12 @@ async def search_passengers(req: SearchRequest, request: Request, db: Session = 
     driver_profile = db.query(modelDB.DriverProfile).filter(modelDB.DriverProfile.user_id == current_driver_id).first()
     driver_embedding = driver_profile.embedding if driver_profile else None
 
-    # 3. Input Coordinates
+    # 3. Input Coordinates (並列実行)
     f = req.filter
-    p_start = get_coordinates(f.departure)
-    p_end = get_coordinates(f.destination)
+    p_start, p_end = await asyncio.gather(
+        get_coordinates(f.departure),
+        get_coordinates(f.destination)
+    )
     
     # 4. Base Query
     if driver_embedding is not None:
